@@ -85,3 +85,28 @@ jobs:
           path: bridge/dist/quotaframe-bridge-macos-arm64-four-providers.dmg
           if-no-files-found: error
           retention-days: 30
+
+  publish:
+    name: Publish build as a pre-release
+    needs: [firmware, bridge-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Replace the rolling pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: four-providers-latest
+        shell: bash
+        run: |
+          ls -la dist
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --title "Four providers build" \
+            --notes "Waveshare AMOLED 2.16 firmware and Apple Silicon Bridge with Codex, Claude, Gemini and Grok. Built from ${GITHUB_SHA}." \
+            dist/ws_usage_panel_full.bin dist/ws_usage_panel.bin \
+            dist/quotaframe-bridge-macos-arm64-four-providers.dmg
