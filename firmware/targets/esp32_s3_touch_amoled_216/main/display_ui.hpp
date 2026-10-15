@@ -97,16 +97,16 @@ public:
     struct ProviderWidgets {
         bool compact = false;
         lv_obj_t* panel = nullptr;
-        // Overview: state text below the stats, empty while online.
-        // Detail: sample age or state, right-aligned in the title row.
+        // Overview only: state text below the stats, empty while online.
         lv_obj_t* status = nullptr;
         lv_obj_t* name_dot = nullptr;
         RingWidgets ring;
         lv_obj_t* short_reset = nullptr;
         // Overview: weekly percentage. Detail: weekly reset countdown.
         lv_obj_t* week_value = nullptr;
-        // Detail only: weekly percentage under the centred value, and the
-        // legend dots that tie each reset countdown to its ring.
+        // Detail only: weekly percentage (or link/data state) under the
+        // centred value, and the legend dots that tie each reset countdown
+        // to its ring.
         lv_obj_t* week_caption = nullptr;
         lv_obj_t* short_legend = nullptr;
         lv_obj_t* week_legend = nullptr;
