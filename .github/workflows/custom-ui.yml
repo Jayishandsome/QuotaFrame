@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - custom-ui
+      - pixel-ui
 
 permissions:
   contents: read
@@ -47,7 +48,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           . "$IDF_PATH/export.sh"
           version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' bridge/src/quotaframe_bridge/__init__.py)
-          idf.py -C "$TARGET_PATH" -D PROJECT_VER="${version}-ui" build
+          idf.py -C "$TARGET_PATH" -D PROJECT_VER="${version}-${GITHUB_REF_NAME}" build
           idf.py -C "$TARGET_PATH" merge-bin -o ws_usage_panel_full.bin
 
       - uses: actions/upload-artifact@v4
@@ -78,11 +79,11 @@ jobs:
         run: |
           ./bridge/build_dmg.sh \
             --app "bridge/dist/QuotaFrame Bridge.app" \
-            --output "bridge/dist/quotaframe-bridge-macos-arm64-custom-ui.dmg"
+            --output "bridge/dist/quotaframe-bridge-macos-arm64-${{ github.ref_name }}.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: bridge-macos
-          path: bridge/dist/quotaframe-bridge-macos-arm64-custom-ui.dmg
+          path: bridge/dist/quotaframe-bridge-macos-arm64-${{ github.ref_name }}.dmg
           if-no-files-found: error
           retention-days: 30
 
@@ -100,13 +101,13 @@ jobs:
       - name: Replace the rolling pre-release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: custom-ui-latest
+          TAG: ${{ github.ref_name }}-latest
         shell: bash
         run: |
           ls -la dist
           gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --prerelease --title "Custom UI build" \
-            --notes "Waveshare AMOLED 2.16 firmware with the ring UI for Codex and Claude, and the Apple Silicon Bridge. Built from ${GITHUB_SHA}." \
+            --prerelease --title "${{ github.ref_name }} build" \
+            --notes "Waveshare AMOLED 2.16 firmware with the ${{ github.ref_name }} usage UI for Codex and Claude, and the Apple Silicon Bridge. Built from ${GITHUB_SHA}." \
             dist/ws_usage_panel_full.bin dist/ws_usage_panel.bin \
-            dist/quotaframe-bridge-macos-arm64-custom-ui.dmg
+            dist/quotaframe-bridge-macos-arm64-${{ github.ref_name }}.dmg

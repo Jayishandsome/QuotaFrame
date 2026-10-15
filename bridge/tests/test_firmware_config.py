@@ -117,7 +117,7 @@ class FirmwareConfigurationTests(unittest.TestCase):
         self.assertIn("screensaver_panel_", header)
         self.assertIn("montserrat_bold_120", source)
         self.assertIn("lv_obj_set_size(screensaver_panel_, SCREEN_W, SCREEN_H)", source)
-        for label in ('"OVERVIEW"', '"CODEX"', '"CLAUDE"'):
+        for label in ('"ALL"', '"CODEX"', '"CLAUDE"'):
             self.assertIn(label, source)
         self.assertIn(
             "enum class Page : uint8_t { Overview, Codex, Claude };",
@@ -225,8 +225,9 @@ class FirmwareConfigurationTests(unittest.TestCase):
             "CONFIG_LV_USE_CLIB_STRING": "y",
             "CONFIG_LV_USE_CLIB_SPRINTF": "y",
             "CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM": "n",
-            "CONFIG_LV_USE_ARC": "y",
             "CONFIG_LV_USE_BAR": "y",
+            "CONFIG_LV_USE_CANVAS": "y",
+            "CONFIG_LV_USE_IMAGE": "y",
             "CONFIG_LV_USE_BUTTON": "y",
             "CONFIG_LV_USE_LABEL": "y",
             "CONFIG_LV_USE_FLEX": "y",
@@ -247,13 +248,12 @@ class FirmwareConfigurationTests(unittest.TestCase):
 
         unused_widgets = (
             "CONFIG_LV_USE_ANIMIMG",
+            "CONFIG_LV_USE_ARC",
             "CONFIG_LV_USE_BUTTONMATRIX",
             "CONFIG_LV_USE_CALENDAR",
-            "CONFIG_LV_USE_CANVAS",
             "CONFIG_LV_USE_CHART",
             "CONFIG_LV_USE_CHECKBOX",
             "CONFIG_LV_USE_DROPDOWN",
-            "CONFIG_LV_USE_IMAGE",
             "CONFIG_LV_USE_IMAGEBUTTON",
             "CONFIG_LV_USE_KEYBOARD",
             "CONFIG_LV_USE_LED",

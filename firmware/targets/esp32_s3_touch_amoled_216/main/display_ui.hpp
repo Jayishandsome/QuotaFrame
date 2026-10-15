@@ -81,12 +81,12 @@ public:
     }
 
     /**
-     * Concentric usage rings: the outer arc is the short (5-hour) window and
-     * the inner arc the weekly window, with the short percentage centred.
+     * Concentric pixel rings on one canvas: the outer band is the short
+     * (5-hour) window and the inner band the weekly window, with the short
+     * percentage centred.
      */
     struct RingWidgets {
-        lv_obj_t* outer = nullptr;
-        lv_obj_t* inner = nullptr;
+        lv_obj_t* rings = nullptr;
         lv_obj_t* value = nullptr;
     };
 

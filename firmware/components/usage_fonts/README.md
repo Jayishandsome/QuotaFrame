@@ -36,3 +36,21 @@ pnpm dlx lv_font_conv@1.5.3 --font $semiboldFont --symbols ' ABCDEFGHIJKLMNOPQRS
 ```
 
 After generation, replace the machine-specific input and output paths in the generated `Opts` comment with the stable basenames shown in the checked-in file. The font data itself is not modified.
+
+## Pixel subsets
+
+The `pixel_*` fonts drive the pixel-style usage screens. They are 1 bit per
+pixel so glyph edges stay hard on the AMOLED panel.
+
+- `pixel_press_16`, `pixel_press_24`, `pixel_press_40`: Press Start 2P
+  (Google Fonts `ofl/pressstart2p/PressStart2P-Regular.ttf`), licensed under
+  the SIL Open Font License; see `OFL-PressStart2P.txt`.
+- `pixel_silk_16`: Silkscreen (Google Fonts `ofl/silkscreen/Silkscreen-Regular.ttf`),
+  licensed under the SIL Open Font License; see `OFL-Silkscreen.txt`.
+
+```sh
+lv_font_conv --font PressStart2P-Regular.ttf --symbols ' 0123456789%:-ABCDEFGHIJKLMNOPQRSTUVWXYZdhm' --size 16 --format lvgl --bpp 1 --no-compress --lv-include 'lvgl.h' --lv-font-name pixel_press_16 --output pixel_press_16.c
+lv_font_conv --font PressStart2P-Regular.ttf --symbols ' 0123456789%-AITWdhm' --size 24 --format lvgl --bpp 1 --no-compress --lv-include 'lvgl.h' --lv-font-name pixel_press_24 --output pixel_press_24.c
+lv_font_conv --font PressStart2P-Regular.ttf --symbols '0123456789%-' --size 40 --format lvgl --bpp 1 --no-compress --lv-include 'lvgl.h' --lv-font-name pixel_press_40 --output pixel_press_40.c
+lv_font_conv --font Silkscreen-Regular.ttf --symbols ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789%-:./' --size 16 --format lvgl --bpp 1 --no-compress --lv-include 'lvgl.h' --lv-font-name pixel_silk_16 --output pixel_silk_16.c
+```

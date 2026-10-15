@@ -1,5 +1,7 @@
 #include "display_ui.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
@@ -57,40 +59,37 @@ constexpr int CARD_PAD    = 20;
 constexpr int CARD_RADIUS = 16;
 constexpr int HEADER_H    = 50;
 constexpr int BAR_H_DETAIL   = 16;
-// Overview: one ring column per provider, centred in each half of the panel.
-// Y values are relative to the content panel, which starts at CONTENT_Y.
+// Overview: one pixel-ring column per provider, centred in each half of the
+// panel. Y values are relative to the content panel, which starts at CONTENT_Y.
 constexpr int OV_COLUMN_CX[2] = {132, 348};
-constexpr int OV_RING_D       = 188;
-constexpr int OV_RING_W       = 14;
-constexpr int OV_INNER_D      = OV_RING_D - 40;
-constexpr int OV_INNER_W      = 8;
-constexpr int OV_RING_TOP     = 33;
-constexpr int OV_RING_CY      = OV_RING_TOP + OV_RING_D / 2;
-constexpr int OV_NAME_Y       = OV_RING_TOP + OV_RING_D + 12;
-constexpr int OV_STAT_LABEL_Y = OV_RING_TOP + OV_RING_D + 52;
-constexpr int OV_STAT_VALUE_Y = OV_STAT_LABEL_Y + 20;
-constexpr int OV_STATE_Y      = OV_STAT_LABEL_Y + 56;
-constexpr int OV_STAT_DX      = 50;   // Stat column centre offset from the ring centre.
-constexpr int OV_STAT_W       = 96;
-// Detail: one large ring carrying the provider name, with reset stats below.
-constexpr int DT_RING_D       = 250;
-constexpr int DT_RING_W       = 18;
-constexpr int DT_INNER_D      = DT_RING_D - 52;
-constexpr int DT_INNER_W      = 10;
-constexpr int DT_RING_TOP     = 24;
-constexpr int DT_RING_CY      = DT_RING_TOP + DT_RING_D / 2;
-constexpr int DT_STAT_LABEL_Y = DT_RING_TOP + DT_RING_D + 26;
+constexpr int OV_CELL         = 6;
+constexpr int OV_RING_D       = 180;
+constexpr int OV_RING_W       = 18;   // Three cells.
+constexpr int OV_INNER_D      = 126;
+constexpr int OV_INNER_W      = 12;   // Two cells.
+constexpr int OV_RING_CY      = 124;
+constexpr int OV_NAME_Y       = OV_RING_CY + OV_RING_D / 2 + 26;
+constexpr int OV_ROW_Y[2]     = {OV_NAME_Y + 40, OV_NAME_Y + 68};
+constexpr int OV_ROW_HALF_W   = 84;   // Stat rows span the ring centre +/- this.
+// Detail: one large pixel ring carrying the provider name, stats below.
+constexpr int DT_CELL         = 8;
+constexpr int DT_RING_D       = 240;
+constexpr int DT_RING_W       = 24;   // Three cells.
+constexpr int DT_INNER_D      = 176;
+constexpr int DT_INNER_W      = 16;   // Two cells.
+constexpr int DT_RING_CY      = 138;
+constexpr int DT_STAT_LABEL_Y = DT_RING_CY + DT_RING_D / 2 + 30;
 constexpr int DT_STAT_VALUE_Y = DT_STAT_LABEL_Y + 22;
 constexpr int DT_STAT_RIGHT_X = 256;
 // Weekly ring colour: the provider colour mixed toward black (255 = pure).
-constexpr uint8_t INNER_RING_MIX = 140;
+constexpr uint8_t INNER_RING_MIX = 150;
 // A stale (disconnected) sample keeps its geometry but loses most of its colour.
 constexpr uint8_t STALE_RING_MIX = 90;
 constexpr int NAV_H       = 34;
 constexpr int NAV_Y       = 436;
 constexpr int NAV_GAP     = 6;
-constexpr int NAV_BAR_W   = 26;
-constexpr int NAV_BAR_H   = 2;
+constexpr int NAV_BAR_W   = 24;
+constexpr int NAV_BAR_H   = 4;
 constexpr int NAV_LABEL_GAP = 7;
 // The three tabs share the row with flex-grow 1, so their width is exact only
 // while the remaining space divides evenly. The shared underline is placed from
@@ -459,60 +458,126 @@ lv_color_t mix_with_black(uint32_t color, uint8_t amount)
     return lv_color_mix(lv_color_hex(color), lv_color_black(), amount);
 }
 
-/** Creates a non-interactive full-circle arc starting at 12 o'clock. */
-lv_obj_t* make_ring(lv_obj_t* parent, int center_x, int center_y,
-                    int diameter, int width, uint32_t track)
-{
-    lv_obj_t* arc = lv_arc_create(parent);
-    lv_obj_remove_style_all(arc);
-    lv_obj_set_size(arc, diameter, diameter);
-    lv_obj_set_pos(arc, center_x - diameter / 2, center_y - diameter / 2);
-    lv_arc_set_rotation(arc, 270);
-    lv_arc_set_bg_angles(arc, 0, 360);
-    lv_arc_set_range(arc, 0, 100);
-    lv_arc_set_value(arc, 0);
-    lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_flag(arc, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_arc_width(arc, width, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(arc, lv_color_hex(track), LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_INDICATOR);
-    return arc;
-}
+/**
+ * Concentric usage rings drawn as a grid of square cells, each band lit
+ * clockwise from 12 o'clock.
+ *
+ * Both bands share one opaque canvas: separate canvases would overlap and the
+ * inner one's black corners would cover the outer band. The buffer is painted
+ * only when a value or colour changes; LVGL then blits it like any image, so a
+ * steady screen costs no per-cell drawing.
+ */
+struct PixelRingBand {
+    int inner_radius = 0;
+    int outer_radius = 0;
+    int32_t value = 0;
+    uint32_t lit = 0;
+    uint32_t track = 0;
+};
 
-void ring_value_exec(void* target, int32_t value)
+struct PixelRings {
+    uint16_t* pixels = nullptr;  // size * size, owned for the program lifetime.
+    int size = 0;                // Canvas edge in pixels.
+    int cell = 0;                // Grid pitch in pixels.
+    int gap = 0;                 // Unlit pixels between neighbouring cells.
+    PixelRingBand bands[2];      // RING_OUTER and RING_INNER.
+};
+
+constexpr int RING_OUTER = 0;
+constexpr int RING_INNER = 1;
+
+// One ring pair per provider on the overview and one per detail page.
+constexpr size_t MAX_PIXEL_RINGS = 4;
+PixelRings pixel_rings[MAX_PIXEL_RINGS];
+size_t pixel_ring_count = 0;
+
+void paint_pixel_rings(const PixelRings& rings)
 {
-    lv_arc_set_value(static_cast<lv_obj_t*>(target), value);
+    std::fill(rings.pixels, rings.pixels + rings.size * rings.size, uint16_t{0});
+    const int center = rings.size / 2;
+    const int steps = rings.bands[RING_OUTER].outer_radius / rings.cell + 1;
+    const int block = rings.cell - rings.gap;
+    for (int row = -steps; row <= steps; ++row) {
+        for (int column = -steps; column <= steps; ++column) {
+            const int dx = column * rings.cell;
+            const int dy = row * rings.cell;
+            const float distance = std::sqrt(static_cast<float>(dx * dx + dy * dy));
+            const PixelRingBand* band = nullptr;
+            for (const PixelRingBand& candidate : rings.bands) {
+                // Strict outer bound: a cell exactly on the radius would only
+                // appear on the axes and read as a stray tick.
+                if (distance >= candidate.inner_radius &&
+                    distance < candidate.outer_radius) band = &candidate;
+            }
+            if (band == nullptr) continue;
+            // Clockwise angle from 12 o'clock, in [0, 360).
+            float degrees = std::atan2(static_cast<float>(dx), static_cast<float>(-dy)) *
+                            57.2957795f;
+            if (degrees < 0) degrees += 360.0f;
+            const bool lit = band->value > 0 &&
+                degrees < 3.6f * static_cast<float>(band->value);
+            const uint16_t color =
+                lv_color_to_u16(lv_color_hex(lit ? band->lit : band->track));
+            const int left = center + dx - rings.cell / 2 + rings.gap / 2;
+            const int top = center + dy - rings.cell / 2 + rings.gap / 2;
+            for (int y = std::max(top, 0); y < std::min(top + block, rings.size); ++y) {
+                for (int x = std::max(left, 0); x < std::min(left + block, rings.size); ++x) {
+                    rings.pixels[y * rings.size + x] = color;
+                }
+            }
+        }
+    }
 }
 
 /**
- * Moves a ring to a percentage. render() runs once per second, so a ring
- * already showing or animating toward the same value is left alone. The
- * target is kept in the arc's user data, offset by one so null means unset.
+ * Creates a ring pair centred on (center_x, center_y). Each band is given by
+ * the outer diameter and width of its cell centres; `cell` is the grid pitch.
  */
-void set_ring_value(lv_obj_t* arc, int32_t value, bool animate)
+lv_obj_t* make_rings(lv_obj_t* parent, int center_x, int center_y, int cell,
+                     int outer_d, int outer_w, uint32_t outer_track,
+                     int inner_d, int inner_w, uint32_t inner_track)
 {
-    const auto target = reinterpret_cast<intptr_t>(lv_obj_get_user_data(arc));
-    if (target == value + 1) return;
-    lv_obj_set_user_data(arc, reinterpret_cast<void*>(intptr_t{value + 1}));
-    lv_anim_delete(arc, ring_value_exec);
-    // A zero-length rounded indicator would still draw a dot at 12 o'clock.
-    lv_obj_set_style_arc_opa(
-        arc, value > 0 ? LV_OPA_COVER : LV_OPA_TRANSP, LV_PART_INDICATOR);
-    if (!animate) {
-        lv_arc_set_value(arc, value);
-        return;
+    if (pixel_ring_count >= MAX_PIXEL_RINGS) {
+        ESP_LOGE(TAG, "pixel ring pool exhausted");
+        return nullptr;
     }
-    lv_anim_t anim;
-    lv_anim_init(&anim);
-    lv_anim_set_var(&anim, arc);
-    lv_anim_set_exec_cb(&anim, ring_value_exec);
-    lv_anim_set_values(&anim, lv_arc_get_value(arc), value);
-    lv_anim_set_duration(&anim, UI_ANIM_MS * 2);
-    lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
-    lv_anim_start(&anim);
+    PixelRings& rings = pixel_rings[pixel_ring_count++];
+    rings.cell = cell;
+    rings.gap = cell >= 8 ? 2 : 1;
+    rings.size = outer_d + cell;
+    rings.bands[RING_OUTER] = {outer_d / 2 - outer_w, outer_d / 2, 0,
+                               outer_track, outer_track};
+    rings.bands[RING_INNER] = {inner_d / 2 - inner_w, inner_d / 2, 0,
+                               inner_track, inner_track};
+    rings.pixels = static_cast<uint16_t*>(heap_caps_malloc(
+        static_cast<size_t>(rings.size) * rings.size * sizeof(uint16_t),
+        MALLOC_CAP_SPIRAM));
+    if (rings.pixels == nullptr) {
+        ESP_LOGE(TAG, "pixel ring buffer allocation failed");
+        return nullptr;
+    }
+    lv_obj_t* canvas = lv_canvas_create(parent);
+    lv_canvas_set_buffer(canvas, rings.pixels, rings.size, rings.size,
+                         LV_COLOR_FORMAT_RGB565);
+    lv_obj_set_pos(canvas, center_x - rings.size / 2, center_y - rings.size / 2);
+    lv_obj_remove_flag(canvas, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(canvas, &rings);
+    paint_pixel_rings(rings);
+    return canvas;
+}
+
+/** Sets one band's percentage and lit colour; repaints only on change. */
+void set_ring_band(lv_obj_t* canvas, int band_index, int32_t value, lv_color_t color)
+{
+    auto* rings = static_cast<PixelRings*>(lv_obj_get_user_data(canvas));
+    if (rings == nullptr) return;
+    PixelRingBand& band = rings->bands[band_index];
+    const uint32_t hex = lv_color_to_u32(color) & 0xFFFFFF;
+    if (band.value == value && band.lit == hex) return;
+    band.value = value;
+    band.lit = hex;
+    paint_pixel_rings(*rings);
+    lv_obj_invalidate(canvas);
 }
 
 /** Creates a fixed-width, centred label whose line box is centred on y. */
@@ -535,7 +600,7 @@ lv_obj_t* make_dot(lv_obj_t* parent, int x, int y, int diameter, uint32_t color)
     lv_obj_remove_style_all(dot);
     lv_obj_set_pos(dot, x, y);
     lv_obj_set_size(dot, diameter, diameter);
-    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_radius(dot, 0, 0);
     lv_obj_set_style_bg_color(dot, lv_color_hex(color), 0);
     lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
     return dot;
@@ -743,12 +808,12 @@ void DisplayUi::probe_refresh_event(lv_event_t* event)
 void DisplayUi::build_header(lv_obj_t* screen)
 {
     clock_label_ = make_label(
-        screen, "--:--", MARGIN, 13,
-        &lv_font_montserrat_22, COLOR_TEXT);
+        screen, "--:--", MARGIN, 18,
+        &pixel_press_16, COLOR_TEXT);
 
     lv_obj_t* status_group = lv_obj_create(screen);
-    lv_obj_set_pos(status_group, 311, 13);
-    lv_obj_set_size(status_group, 91, 28);
+    lv_obj_set_pos(status_group, 292, 13);
+    lv_obj_set_size(status_group, 110, 28);
     lv_obj_set_style_bg_opa(status_group, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(status_group, 0, 0);
     lv_obj_set_style_pad_all(status_group, 0, 0);
@@ -757,7 +822,7 @@ void DisplayUi::build_header(lv_obj_t* screen)
     status_dot_ = lv_obj_create(status_group);
     lv_obj_set_pos(status_dot_, 0, 10);
     lv_obj_set_size(status_dot_, 8, 8);
-    lv_obj_set_style_radius(status_dot_, 4, 0);
+    lv_obj_set_style_radius(status_dot_, 0, 0);
     lv_obj_set_style_bg_color(status_dot_, lv_color_hex(COLOR_MUTED), 0);
     lv_obj_set_style_bg_opa(status_dot_, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(status_dot_, 0, 0);
@@ -765,11 +830,9 @@ void DisplayUi::build_header(lv_obj_t* screen)
     lv_obj_remove_flag(status_dot_, LV_OBJ_FLAG_SCROLLABLE);
 
     connection_label_ = make_label(
-        status_group, "WAITING", 16, 6,
-        &lv_font_montserrat_14, COLOR_RESET);
-    lv_obj_set_width(connection_label_, 75);
-    lv_obj_set_style_text_align(connection_label_, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_letter_space(connection_label_, 1, 0);
+        status_group, "WAITING", 16, 8,
+        &pixel_silk_16, COLOR_RESET);
+    lv_obj_set_width(connection_label_, 94);
 
     battery_group_ = lv_obj_create(screen);
     lv_obj_set_pos(battery_group_, SCREEN_W - MARGIN - BATTERY_GROUP_W, 13);
@@ -990,19 +1053,18 @@ void DisplayUi::build_overview(lv_obj_t* screen)
         widgets.panel = overview_panel_;
         widgets.compact = true;
 
-        widgets.ring.outer = make_ring(
-            overview_panel_, cx, OV_RING_CY, OV_RING_D, OV_RING_W, COLOR_TRACK);
-        widgets.ring.inner = make_ring(
-            overview_panel_, cx, OV_RING_CY, OV_INNER_D, OV_INNER_W,
-            COLOR_TRACK_INNER);
+        widgets.ring.rings = make_rings(
+            overview_panel_, cx, OV_RING_CY, OV_CELL,
+            OV_RING_D, OV_RING_W, COLOR_TRACK,
+            OV_INNER_D, OV_INNER_W, COLOR_TRACK_INNER);
         widgets.ring.value = make_centered_label(
-            overview_panel_, "--", cx, OV_RING_CY - 4, OV_INNER_D - 24,
-            &montserrat_bold_40, COLOR_DIM);
+            overview_panel_, "--", cx, OV_RING_CY - 4, OV_INNER_D - 30,
+            &pixel_press_24, COLOR_DIM);
         make_centered_label(
-            overview_panel_, "5H", cx, OV_RING_CY + 28, 60,
-            &montserrat_semibold_13, COLOR_MUTED);
+            overview_panel_, "5H", cx, OV_RING_CY + 24, 60,
+            &pixel_silk_16, COLOR_MUTED);
 
-        // Dot and name are centred as one group under the ring.
+        // Square and name are centred as one group under the ring.
         lv_obj_t* name_row = lv_obj_create(overview_panel_);
         lv_obj_remove_style_all(name_row);
         lv_obj_set_size(name_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -1010,31 +1072,32 @@ void DisplayUi::build_overview(lv_obj_t* screen)
         lv_obj_set_flex_align(
             name_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
             LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(name_row, 8, 0);
-        lv_obj_align(name_row, LV_ALIGN_TOP_MID, cx - SCREEN_W / 2, OV_NAME_Y);
-        widgets.name_dot = make_dot(name_row, 0, 0, 8, accent);
-        // Flex centres the dot on the line box; capitals sit above its middle.
-        lv_obj_set_style_translate_y(widgets.name_dot, -2, 0);
-        lv_obj_t* name = make_label(
-            name_row, provider == Provider::Codex ? "CODEX" : "CLAUDE", 0, 0,
-            &montserrat_semibold_20, COLOR_TEXT);
-        lv_obj_set_style_text_letter_space(name, 1, 0);
+        lv_obj_set_style_pad_column(name_row, 10, 0);
+        lv_obj_align(name_row, LV_ALIGN_TOP_MID, cx - SCREEN_W / 2,
+                     OV_NAME_Y - 8);
+        widgets.name_dot = make_dot(name_row, 0, 0, 10, accent);
+        make_label(name_row, provider == Provider::Codex ? "CODEX" : "CLAUDE",
+                   0, 0, &pixel_press_16, COLOR_TEXT);
 
-        make_centered_label(
-            overview_panel_, "RESET", cx - OV_STAT_DX, OV_STAT_LABEL_Y + 8,
-            OV_STAT_W, &montserrat_semibold_13, COLOR_DIM);
-        widgets.short_reset = make_centered_label(
-            overview_panel_, "--", cx - OV_STAT_DX, OV_STAT_VALUE_Y + 12,
-            OV_STAT_W, &lv_font_montserrat_20, COLOR_DIM);
-        make_centered_label(
-            overview_panel_, "WEEK", cx + OV_STAT_DX, OV_STAT_LABEL_Y + 8,
-            OV_STAT_W, &montserrat_semibold_13, COLOR_DIM);
-        widgets.week_value = make_centered_label(
-            overview_panel_, "--", cx + OV_STAT_DX, OV_STAT_VALUE_Y + 12,
-            OV_STAT_W, &lv_font_montserrat_20, COLOR_DIM);
+        // Two label/value rows: label on the left, value right-aligned.
+        const char* row_labels[2] = {"RESET", "WEEK"};
+        lv_obj_t** row_values[2] = {&widgets.short_reset, &widgets.week_value};
+        for (int row = 0; row < 2; ++row) {
+            const int y = OV_ROW_Y[row];
+            make_label(overview_panel_, row_labels[row], cx - OV_ROW_HALF_W,
+                       y - lv_font_get_line_height(&pixel_silk_16) / 2,
+                       &pixel_silk_16, COLOR_DIM);
+            lv_obj_t* value = make_label(
+                overview_panel_, "--", cx - OV_ROW_HALF_W,
+                y - lv_font_get_line_height(&pixel_press_16) / 2,
+                &pixel_press_16, COLOR_DIM);
+            lv_obj_set_width(value, 2 * OV_ROW_HALF_W);
+            lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
+            *row_values[row] = value;
+        }
         widgets.status = make_centered_label(
-            overview_panel_, "NO DATA", cx, OV_STATE_Y + 8, 200,
-            &montserrat_semibold_13, COLOR_DIM);
+            overview_panel_, "", cx, OV_ROW_Y[1] + 30, 2 * OV_ROW_HALF_W,
+            &pixel_silk_16, COLOR_DIM);
     }
 }
 
@@ -1055,45 +1118,38 @@ void DisplayUi::build_provider_page(lv_obj_t* screen, Provider provider)
         widgets.panel, gesture_event, LV_EVENT_GESTURE, this);
 
     const int cx = SCREEN_W / 2;
-    widgets.ring.outer = make_ring(
-        widgets.panel, cx, DT_RING_CY, DT_RING_D, DT_RING_W, COLOR_TRACK);
-    widgets.ring.inner = make_ring(
-        widgets.panel, cx, DT_RING_CY, DT_INNER_D, DT_INNER_W,
-        COLOR_TRACK_INNER);
-    lv_obj_t* name = make_centered_label(
+    widgets.ring.rings = make_rings(
+        widgets.panel, cx, DT_RING_CY, DT_CELL,
+        DT_RING_D, DT_RING_W, COLOR_TRACK,
+        DT_INNER_D, DT_INNER_W, COLOR_TRACK_INNER);
+    make_centered_label(
         widgets.panel, provider == Provider::Codex ? "CODEX" : "CLAUDE",
-        cx, DT_RING_CY - 46, DT_INNER_D - 40, &montserrat_semibold_20, accent);
-    lv_obj_set_style_text_letter_space(name, 2, 0);
+        cx, DT_RING_CY - 44, DT_INNER_D - 50, &pixel_silk_16, accent);
     widgets.ring.value = make_centered_label(
-        widgets.panel, "--", cx, DT_RING_CY + 2, DT_INNER_D - 30,
-        &montserrat_bold_56, COLOR_DIM);
+        widgets.panel, "--", cx, DT_RING_CY, DT_INNER_D - 40,
+        &pixel_press_40, COLOR_DIM);
     // Weekly percentage while online; the link or data state otherwise.
     widgets.week_caption = make_centered_label(
-        widgets.panel, "WEEK --", cx, DT_RING_CY + 44, DT_INNER_D - 40,
-        &montserrat_semibold_13, COLOR_MUTED);
-    lv_obj_set_style_text_letter_space(widgets.week_caption, 1, 0);
+        widgets.panel, "WEEK --", cx, DT_RING_CY + 42, DT_INNER_D - 50,
+        &pixel_silk_16, COLOR_MUTED);
 
     widgets.short_legend = make_dot(
-        widgets.panel, MARGIN, DT_STAT_LABEL_Y + 2, 8, accent);
-    lv_obj_t* label = make_label(
-        widgets.panel, "5-HOUR RESET", MARGIN + 16, DT_STAT_LABEL_Y,
-        &montserrat_semibold_13, COLOR_MUTED);
-    lv_obj_set_style_text_letter_space(label, 1, 0);
+        widgets.panel, MARGIN, DT_STAT_LABEL_Y + 1, 10, accent);
+    make_label(widgets.panel, "5H RESET", MARGIN + 18, DT_STAT_LABEL_Y,
+               &pixel_silk_16, COLOR_MUTED);
     widgets.short_reset = make_label(
         widgets.panel, "--", MARGIN, DT_STAT_VALUE_Y,
-        &lv_font_montserrat_26, COLOR_DIM);
+        &pixel_press_24, COLOR_DIM);
 
     widgets.week_legend = make_dot(
-        widgets.panel, DT_STAT_RIGHT_X, DT_STAT_LABEL_Y + 2, 8, accent);
+        widgets.panel, DT_STAT_RIGHT_X, DT_STAT_LABEL_Y + 1, 10, accent);
     lv_obj_set_style_bg_color(
         widgets.week_legend, mix_with_black(accent, INNER_RING_MIX), 0);
-    label = make_label(
-        widgets.panel, "WEEKLY RESET", DT_STAT_RIGHT_X + 16, DT_STAT_LABEL_Y,
-        &montserrat_semibold_13, COLOR_MUTED);
-    lv_obj_set_style_text_letter_space(label, 1, 0);
+    make_label(widgets.panel, "WEEK RESET", DT_STAT_RIGHT_X + 18,
+               DT_STAT_LABEL_Y, &pixel_silk_16, COLOR_MUTED);
     widgets.week_value = make_label(
         widgets.panel, "--", DT_STAT_RIGHT_X, DT_STAT_VALUE_Y,
-        &lv_font_montserrat_26, COLOR_DIM);
+        &pixel_press_24, COLOR_DIM);
 }
 
 void DisplayUi::build_navigation(lv_obj_t* screen)
@@ -1108,7 +1164,7 @@ void DisplayUi::build_navigation(lv_obj_t* screen)
     lv_obj_set_flex_flow(navigation, LV_FLEX_FLOW_ROW);
     lv_obj_remove_flag(navigation, LV_OBJ_FLAG_SCROLLABLE);
 
-    const char* labels[] = {"OVERVIEW", "CODEX", "CLAUDE"};
+    const char* labels[] = {"ALL", "CODEX", "CLAUDE"};
     for (size_t i = 0; i < 3; ++i) {
         tab_bindings_[i] =
             TabBinding{this, static_cast<uint8_t>(i)};
@@ -1137,7 +1193,7 @@ void DisplayUi::build_navigation(lv_obj_t* screen)
         nav_labels_[i] =
             make_label(
                 tab, labels[i], 0, 0,
-                &montserrat_semibold_13, COLOR_DIM);
+                &pixel_silk_16, COLOR_DIM);
         lv_obj_set_style_text_letter_space(nav_labels_[i], 1, 0);
     }
 
@@ -1150,7 +1206,7 @@ void DisplayUi::build_navigation(lv_obj_t* screen)
     nav_indicator_ = lv_obj_create(navigation);
     lv_obj_add_flag(nav_indicator_, LV_OBJ_FLAG_IGNORE_LAYOUT);
     lv_obj_set_size(nav_indicator_, NAV_BAR_W, NAV_BAR_H);
-    lv_obj_set_style_radius(nav_indicator_, NAV_BAR_H / 2, 0);
+    lv_obj_set_style_radius(nav_indicator_, 0, 0);
     lv_obj_set_style_bg_color(nav_indicator_, lv_color_hex(COLOR_RESET), 0);
     lv_obj_set_style_bg_opa(nav_indicator_, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(nav_indicator_, 0, 0);
@@ -1569,17 +1625,13 @@ void DisplayUi::update_provider(
     // Rings: severity tiers override the provider colour; a stale sample
     // keeps its arcs but fades them so it cannot pass for live data.
     const uint8_t stale_mix = fresh ? uint8_t{LV_OPA_COVER} : STALE_RING_MIX;
-    lv_obj_set_style_arc_color(
-        widgets.ring.outer,
-        mix_with_black(ring_color_hex(short_pct, accent), stale_mix),
-        LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(
-        widgets.ring.inner,
+    set_ring_band(
+        widgets.ring.rings, RING_OUTER, short_present ? short_pct : 0,
+        mix_with_black(ring_color_hex(short_pct, accent), stale_mix));
+    set_ring_band(
+        widgets.ring.rings, RING_INNER, week_present ? week_pct : 0,
         mix_with_black(ring_color_hex(week_pct, accent),
-                       fresh ? INNER_RING_MIX : STALE_RING_MIX / 2),
-        LV_PART_INDICATOR);
-    set_ring_value(widgets.ring.outer, short_present ? short_pct : 0, true);
-    set_ring_value(widgets.ring.inner, week_present ? week_pct : 0, true);
+                       fresh ? INNER_RING_MIX : STALE_RING_MIX / 2));
 
     set_percent_text(widgets.ring.value, short_present, short_pct);
     lv_obj_set_style_text_color(
