@@ -1,5 +1,6 @@
 #include "display_ui.hpp"
 
+#include <cstdint>
 #include <cstdio>
 #include <initializer_list>
 
@@ -20,13 +21,19 @@
 namespace usage_panel::amoled {
 namespace {
 constexpr char TAG[] = "amoled_ui";
-constexpr uint32_t COLOR_BG     = 0x0A0C10;
+// Unlit AMOLED pixels: black reads as the panel edge and draws no current.
+constexpr uint32_t COLOR_BG     = 0x000000;
 // True black keeps background pixels unlit during prolonged screensaver use.
 constexpr uint32_t COLOR_SAVER_BG = 0x000000;
-constexpr uint32_t COLOR_PANEL  = 0x171B22;
-constexpr uint32_t COLOR_BORDER = 0x272C35;
-constexpr uint32_t COLOR_LINE   = 0x1D2128;
-constexpr uint32_t COLOR_TRACK  = 0x252A33;
+constexpr uint32_t COLOR_PANEL  = 0x111419;
+constexpr uint32_t COLOR_BORDER = 0x1F232B;
+constexpr uint32_t COLOR_LINE   = 0x14171D;
+constexpr uint32_t COLOR_TRACK  = 0x1A1E26;
+// The inner (weekly) ring sits on a darker track so the two rings separate.
+constexpr uint32_t COLOR_TRACK_INNER = 0x14171D;
+// Provider identity colours: rings, name dots and the navigation underline.
+constexpr uint32_t COLOR_CODEX  = 0x7C9CFF;
+constexpr uint32_t COLOR_CLAUDE = 0xE8875F;
 constexpr uint32_t COLOR_TEXT   = 0xF2F4F7;
 constexpr uint32_t COLOR_MUTED  = 0x8B93A1;
 constexpr uint32_t COLOR_DIM    = 0x565D68;
@@ -47,11 +54,38 @@ constexpr uint32_t COLOR_SAVER_BAD   = COLOR_MUTED;
 constexpr int MARGIN      = 24;
 constexpr int CARD_W      = 432;
 constexpr int CARD_PAD    = 20;
-constexpr int OVERVIEW_PAD = 18;
 constexpr int CARD_RADIUS = 16;
 constexpr int HEADER_H    = 50;
-constexpr int BAR_H_OVERVIEW = 12;
 constexpr int BAR_H_DETAIL   = 16;
+// Overview: one ring column per provider, centred in each half of the panel.
+// Y values are relative to the content panel, which starts at CONTENT_Y.
+constexpr int OV_COLUMN_CX[2] = {132, 348};
+constexpr int OV_RING_D       = 188;
+constexpr int OV_RING_W       = 14;
+constexpr int OV_INNER_D      = OV_RING_D - 40;
+constexpr int OV_INNER_W      = 8;
+constexpr int OV_RING_TOP     = 33;
+constexpr int OV_RING_CY      = OV_RING_TOP + OV_RING_D / 2;
+constexpr int OV_NAME_Y       = OV_RING_TOP + OV_RING_D + 12;
+constexpr int OV_STAT_LABEL_Y = OV_RING_TOP + OV_RING_D + 52;
+constexpr int OV_STAT_VALUE_Y = OV_STAT_LABEL_Y + 20;
+constexpr int OV_STATE_Y      = OV_STAT_LABEL_Y + 56;
+constexpr int OV_STAT_DX      = 50;   // Stat column centre offset from the ring centre.
+constexpr int OV_STAT_W       = 96;
+// Detail: one large ring centred under the title row.
+constexpr int DT_RING_D       = 236;
+constexpr int DT_RING_W       = 18;
+constexpr int DT_INNER_D      = DT_RING_D - 52;
+constexpr int DT_INNER_W      = 10;
+constexpr int DT_RING_TOP     = 53;
+constexpr int DT_RING_CY      = DT_RING_TOP + DT_RING_D / 2;
+constexpr int DT_STAT_LABEL_Y = DT_RING_TOP + DT_RING_D + 16;
+constexpr int DT_STAT_VALUE_Y = DT_STAT_LABEL_Y + 22;
+constexpr int DT_STAT_RIGHT_X = 256;
+// Weekly ring colour: the provider colour mixed toward black (255 = pure).
+constexpr uint8_t INNER_RING_MIX = 140;
+// A stale (disconnected) sample keeps its geometry but loses most of its colour.
+constexpr uint8_t STALE_RING_MIX = 90;
 constexpr int NAV_H       = 34;
 constexpr int NAV_Y       = 436;
 constexpr int NAV_GAP     = 6;
@@ -335,10 +369,6 @@ static_assert(usage_color_hex(94) == COLOR_WARN);
 static_assert(usage_color_hex(95) == COLOR_BAD);
 static_assert(usage_color_hex(100) == COLOR_BAD);
 
-lv_color_t usage_color(uint8_t percent)
-{
-    return lv_color_hex(usage_color_hex(percent));
-}
 
 constexpr uint32_t saver_usage_color_hex(ScreensaverUsageLevel level)
 {
@@ -413,50 +443,109 @@ void nav_indicator_slide(void* target, int32_t translate_x)
         static_cast<lv_obj_t*>(target), translate_x, 0);
 }
 
-void build_compact_metric(lv_obj_t* parent, const char* name,
-                           int label_y, int value_y, int bar_y,
-                           DisplayUi::MetricWidgets& widgets)
+uint32_t provider_color(Provider provider)
 {
-    lv_obj_t* label = make_label(
-        parent, name, OVERVIEW_PAD, label_y,
-        &lv_font_montserrat_14, COLOR_MUTED);
-    lv_obj_set_style_text_letter_space(label, 1, 0);
-    widgets.value =
-        make_label(parent, "--", OVERVIEW_PAD, value_y,
-                   &lv_font_montserrat_30);
-    lv_obj_set_width(widgets.value, CARD_W - 2 * OVERVIEW_PAD);
-    lv_obj_set_style_text_align(widgets.value, LV_TEXT_ALIGN_RIGHT, 0);
-    widgets.bar = lv_bar_create(parent);
-    lv_obj_set_pos(widgets.bar, OVERVIEW_PAD, bar_y);
-    lv_obj_set_size(
-        widgets.bar, CARD_W - 2 * OVERVIEW_PAD, BAR_H_OVERVIEW);
-    style_bar(widgets.bar, BAR_H_OVERVIEW);
-    lv_bar_set_value(widgets.bar, 0, LV_ANIM_OFF);
+    return provider == Provider::Codex ? COLOR_CODEX : COLOR_CLAUDE;
 }
 
-void build_large_metric(lv_obj_t* parent, const char* name, int y,
-                        DisplayUi::MetricWidgets& widgets)
+/** Ring colour for a usage percentage: provider colour until the alert tiers. */
+constexpr uint32_t ring_color_hex(uint8_t percent, uint32_t accent)
 {
-    lv_obj_t* card = lv_obj_create(parent);
-    lv_obj_set_pos(card, MARGIN, y);
-    lv_obj_set_size(card, CARD_W, 158);
-    style_panel(card);
+    return percent >= 95 ? COLOR_BAD : percent >= 80 ? COLOR_WARN : accent;
+}
+
+lv_color_t mix_with_black(uint32_t color, uint8_t amount)
+{
+    return lv_color_mix(lv_color_hex(color), lv_color_black(), amount);
+}
+
+/** Creates a non-interactive full-circle arc starting at 12 o'clock. */
+lv_obj_t* make_ring(lv_obj_t* parent, int center_x, int center_y,
+                    int diameter, int width, uint32_t track)
+{
+    lv_obj_t* arc = lv_arc_create(parent);
+    lv_obj_remove_style_all(arc);
+    lv_obj_set_size(arc, diameter, diameter);
+    lv_obj_set_pos(arc, center_x - diameter / 2, center_y - diameter / 2);
+    lv_arc_set_rotation(arc, 270);
+    lv_arc_set_bg_angles(arc, 0, 360);
+    lv_arc_set_range(arc, 0, 100);
+    lv_arc_set_value(arc, 0);
+    lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(arc, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_arc_width(arc, width, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(track), LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_INDICATOR);
+    return arc;
+}
+
+void ring_value_exec(void* target, int32_t value)
+{
+    lv_arc_set_value(static_cast<lv_obj_t*>(target), value);
+}
+
+/**
+ * Moves a ring to a percentage. render() runs once per second, so a ring
+ * already showing or animating toward the same value is left alone. The
+ * target is kept in the arc's user data, offset by one so null means unset.
+ */
+void set_ring_value(lv_obj_t* arc, int32_t value, bool animate)
+{
+    const auto target = reinterpret_cast<intptr_t>(lv_obj_get_user_data(arc));
+    if (target == value + 1) return;
+    lv_obj_set_user_data(arc, reinterpret_cast<void*>(intptr_t{value + 1}));
+    lv_anim_delete(arc, ring_value_exec);
+    // A zero-length rounded indicator would still draw a dot at 12 o'clock.
+    lv_obj_set_style_arc_opa(
+        arc, value > 0 ? LV_OPA_COVER : LV_OPA_TRANSP, LV_PART_INDICATOR);
+    if (!animate) {
+        lv_arc_set_value(arc, value);
+        return;
+    }
+    lv_anim_t anim;
+    lv_anim_init(&anim);
+    lv_anim_set_var(&anim, arc);
+    lv_anim_set_exec_cb(&anim, ring_value_exec);
+    lv_anim_set_values(&anim, lv_arc_get_value(arc), value);
+    lv_anim_set_duration(&anim, UI_ANIM_MS * 2);
+    lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
+    lv_anim_start(&anim);
+}
+
+/** Creates a fixed-width, centred label whose line box is centred on y. */
+lv_obj_t* make_centered_label(lv_obj_t* parent, const char* text,
+                              int center_x, int center_y, int width,
+                              const lv_font_t* font, uint32_t color)
+{
     lv_obj_t* label = make_label(
-        card, name, CARD_PAD, 16, &lv_font_montserrat_16, COLOR_MUTED);
-    lv_obj_set_style_text_letter_space(label, 1, 0);
-    widgets.reset =
-        make_label(card, "", 220, 16, &lv_font_montserrat_16, COLOR_RESET);
-    lv_obj_set_width(widgets.reset, CARD_W - 220 - CARD_PAD);
-    lv_obj_set_style_text_align(widgets.reset, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_letter_space(widgets.reset, 1, 0);
-    widgets.value =
-        make_label(card, "--", CARD_PAD, 43, &lv_font_montserrat_48);
-    widgets.bar = lv_bar_create(card);
-    lv_obj_set_pos(widgets.bar, CARD_PAD, 124);
-    lv_obj_set_size(
-        widgets.bar, CARD_W - 2 * CARD_PAD, BAR_H_DETAIL);
-    style_bar(widgets.bar, BAR_H_DETAIL);
-    lv_bar_set_value(widgets.bar, 0, LV_ANIM_OFF);
+        parent, text, center_x - width / 2,
+        center_y - lv_font_get_line_height(font) / 2, font, color);
+    lv_obj_set_width(label, width);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_CLIP);
+    return label;
+}
+
+lv_obj_t* make_dot(lv_obj_t* parent, int x, int y, int diameter, uint32_t color)
+{
+    lv_obj_t* dot = lv_obj_create(parent);
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_pos(dot, x, y);
+    lv_obj_set_size(dot, diameter, diameter);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    return dot;
+}
+
+/** Formats a percentage, or "--" when the window carries no current value. */
+void set_percent_text(lv_obj_t* label, bool present, uint8_t percent)
+{
+    if (present) lv_label_set_text_fmt(label, "%u%%", percent);
+    else lv_label_set_text(label, "--");
 }
 }  // namespace
 
@@ -893,35 +982,66 @@ void DisplayUi::build_overview(lv_obj_t* screen)
     lv_obj_add_event_cb(
         overview_panel_, gesture_event, LV_EVENT_GESTURE, this);
 
-    const char* names[] = {"CODEX", "CLAUDE"};
     for (size_t i = 0; i < 2; ++i) {
+        const Provider provider = i == 0 ? Provider::Codex : Provider::Claude;
+        const uint32_t accent = provider_color(provider);
+        const int cx = OV_COLUMN_CX[i];
         ProviderWidgets& widgets = overview_[i];
-        widgets.panel = lv_obj_create(overview_panel_);
-        lv_obj_set_pos(widgets.panel, MARGIN, i == 0 ? 17 : 195);
-        lv_obj_set_size(widgets.panel, CARD_W, 166);
-        style_panel(widgets.panel);
-        lv_obj_t* title = make_label(
-            widgets.panel, names[i], OVERVIEW_PAD, 14,
-            &lv_font_montserrat_20);
-        lv_obj_set_style_text_letter_space(title, 1, 0);
+        widgets.panel = overview_panel_;
         widgets.compact = true;
-        widgets.status = make_label(
-            widgets.panel, "NO DATA", 220, 17,
-            &lv_font_montserrat_14, COLOR_DIM);
-        lv_obj_set_width(widgets.status, 194);
-        lv_obj_set_style_text_align(widgets.status, LV_TEXT_ALIGN_RIGHT, 0);
-        build_compact_metric(
-            widgets.panel, "SHORT", 50, 42, 78,
-            widgets.short_window);
-        build_compact_metric(
-            widgets.panel, "WEEK", 108, 100, 136,
-            widgets.week_window);
+
+        widgets.ring.outer = make_ring(
+            overview_panel_, cx, OV_RING_CY, OV_RING_D, OV_RING_W, COLOR_TRACK);
+        widgets.ring.inner = make_ring(
+            overview_panel_, cx, OV_RING_CY, OV_INNER_D, OV_INNER_W,
+            COLOR_TRACK_INNER);
+        widgets.ring.value = make_centered_label(
+            overview_panel_, "--", cx, OV_RING_CY - 4, OV_INNER_D - 24,
+            &montserrat_bold_40, COLOR_DIM);
+        make_centered_label(
+            overview_panel_, "5H", cx, OV_RING_CY + 28, 60,
+            &montserrat_semibold_13, COLOR_MUTED);
+
+        // Dot and name are centred as one group under the ring.
+        lv_obj_t* name_row = lv_obj_create(overview_panel_);
+        lv_obj_remove_style_all(name_row);
+        lv_obj_set_size(name_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(name_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(
+            name_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+            LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(name_row, 8, 0);
+        lv_obj_align(name_row, LV_ALIGN_TOP_MID, cx - SCREEN_W / 2, OV_NAME_Y);
+        widgets.name_dot = make_dot(name_row, 0, 0, 8, accent);
+        // Flex centres the dot on the line box; capitals sit above its middle.
+        lv_obj_set_style_translate_y(widgets.name_dot, -2, 0);
+        lv_obj_t* name = make_label(
+            name_row, provider == Provider::Codex ? "CODEX" : "CLAUDE", 0, 0,
+            &montserrat_semibold_20, COLOR_TEXT);
+        lv_obj_set_style_text_letter_space(name, 1, 0);
+
+        make_centered_label(
+            overview_panel_, "RESET", cx - OV_STAT_DX, OV_STAT_LABEL_Y + 8,
+            OV_STAT_W, &montserrat_semibold_13, COLOR_DIM);
+        widgets.short_reset = make_centered_label(
+            overview_panel_, "--", cx - OV_STAT_DX, OV_STAT_VALUE_Y + 12,
+            OV_STAT_W, &lv_font_montserrat_20, COLOR_DIM);
+        make_centered_label(
+            overview_panel_, "WEEK", cx + OV_STAT_DX, OV_STAT_LABEL_Y + 8,
+            OV_STAT_W, &montserrat_semibold_13, COLOR_DIM);
+        widgets.week_value = make_centered_label(
+            overview_panel_, "--", cx + OV_STAT_DX, OV_STAT_VALUE_Y + 12,
+            OV_STAT_W, &lv_font_montserrat_20, COLOR_DIM);
+        widgets.status = make_centered_label(
+            overview_panel_, "NO DATA", cx, OV_STATE_Y + 8, 200,
+            &montserrat_semibold_13, COLOR_DIM);
     }
 }
 
 void DisplayUi::build_provider_page(lv_obj_t* screen, Provider provider)
 {
     const size_t index = provider_index(provider);
+    const uint32_t accent = provider_color(provider);
     ProviderWidgets& widgets = provider_pages_[index];
     widgets.panel = lv_obj_create(screen);
     lv_obj_set_pos(widgets.panel, 0, CONTENT_Y);
@@ -934,21 +1054,54 @@ void DisplayUi::build_provider_page(lv_obj_t* screen, Provider provider)
     lv_obj_add_event_cb(
         widgets.panel, gesture_event, LV_EVENT_GESTURE, this);
 
+    widgets.name_dot = make_dot(widgets.panel, MARGIN, 19, 10, accent);
     lv_obj_t* title = make_label(
         widgets.panel, provider == Provider::Codex ? "CODEX" : "CLAUDE",
-        MARGIN, 11, &lv_font_montserrat_26);
+        MARGIN + 18, 12, &montserrat_semibold_20, COLOR_TEXT);
     lv_obj_set_style_text_letter_space(title, 1, 0);
-    widgets.status =
-        make_label(
-            widgets.panel, "NO DATA", 260, 19,
-            &lv_font_montserrat_14, COLOR_DIM);
+    widgets.status = make_label(
+        widgets.panel, "NO DATA", 260, 15, &lv_font_montserrat_14, COLOR_DIM);
     lv_obj_set_width(widgets.status, SCREEN_W - MARGIN - 260);
     lv_obj_set_style_text_align(widgets.status, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_letter_space(widgets.status, 1, 0);
-    build_large_metric(
-        widgets.panel, "SHORT WINDOW", 49, widgets.short_window);
-    build_large_metric(
-        widgets.panel, "WEEK WINDOW", 217, widgets.week_window);
+
+    const int cx = SCREEN_W / 2;
+    widgets.ring.outer = make_ring(
+        widgets.panel, cx, DT_RING_CY, DT_RING_D, DT_RING_W, COLOR_TRACK);
+    widgets.ring.inner = make_ring(
+        widgets.panel, cx, DT_RING_CY, DT_INNER_D, DT_INNER_W,
+        COLOR_TRACK_INNER);
+    make_centered_label(
+        widgets.panel, "5-HOUR", cx, DT_RING_CY - 34, 120,
+        &montserrat_semibold_13, COLOR_MUTED);
+    widgets.ring.value = make_centered_label(
+        widgets.panel, "--", cx, DT_RING_CY + 4, DT_INNER_D - 30,
+        &montserrat_bold_56, COLOR_DIM);
+    widgets.week_caption = make_centered_label(
+        widgets.panel, "WEEK --", cx, DT_RING_CY + 44, 140,
+        &montserrat_semibold_13, COLOR_MUTED);
+
+    widgets.short_legend = make_dot(
+        widgets.panel, MARGIN, DT_STAT_LABEL_Y + 2, 8, accent);
+    lv_obj_t* label = make_label(
+        widgets.panel, "5-HOUR RESET", MARGIN + 16, DT_STAT_LABEL_Y,
+        &montserrat_semibold_13, COLOR_MUTED);
+    lv_obj_set_style_text_letter_space(label, 1, 0);
+    widgets.short_reset = make_label(
+        widgets.panel, "--", MARGIN, DT_STAT_VALUE_Y,
+        &lv_font_montserrat_26, COLOR_DIM);
+
+    widgets.week_legend = make_dot(
+        widgets.panel, DT_STAT_RIGHT_X, DT_STAT_LABEL_Y + 2, 8, accent);
+    lv_obj_set_style_bg_color(
+        widgets.week_legend, mix_with_black(accent, INNER_RING_MIX), 0);
+    label = make_label(
+        widgets.panel, "WEEKLY RESET", DT_STAT_RIGHT_X + 16, DT_STAT_LABEL_Y,
+        &montserrat_semibold_13, COLOR_MUTED);
+    lv_obj_set_style_text_letter_space(label, 1, 0);
+    widgets.week_value = make_label(
+        widgets.panel, "--", DT_STAT_RIGHT_X, DT_STAT_VALUE_Y,
+        &lv_font_montserrat_26, COLOR_DIM);
 }
 
 void DisplayUi::build_navigation(lv_obj_t* screen)
@@ -1335,6 +1488,10 @@ void DisplayUi::show_page(Page page, bool animate)
     }
 
     const size_t selected = static_cast<size_t>(page);
+    lv_obj_set_style_bg_color(
+        nav_indicator_,
+        lv_color_hex(page == Page::Codex ? COLOR_CODEX
+                     : page == Page::Claude ? COLOR_CLAUDE : COLOR_RESET), 0);
     for (size_t i = 0; i < 3; ++i) {
         lv_obj_set_style_text_color(
             nav_labels_[i],
@@ -1364,40 +1521,6 @@ void DisplayUi::show_page(Page page, bool animate)
             nav_indicator_slide(nav_indicator_, target);
         }
         shown_page_ = page;
-    }
-}
-
-void DisplayUi::update_metric(
-    MetricWidgets& widgets, const UsageWindow& window,
-    bool has_data, uint32_t epoch, bool fresh)
-{
-    if (!has_data || !window.present) {
-        lv_label_set_text(widgets.value, "--");
-        lv_obj_set_style_text_color(
-            widgets.value, lv_color_hex(COLOR_DIM), 0);
-        if (widgets.reset != nullptr) {
-            lv_label_set_text(widgets.reset, "");
-        }
-        set_usage_bar_value_immediately(widgets.bar, 0);
-        lv_obj_set_style_bg_color(
-            widgets.bar, lv_color_hex(COLOR_DIM), LV_PART_INDICATOR);
-        return;
-    }
-
-    lv_label_set_text_fmt(widgets.value, "%u%%", window.used_percent);
-    const lv_color_t color = fresh ? usage_color(window.used_percent)
-                                  : lv_color_hex(COLOR_DIM);
-    lv_obj_set_style_text_color(widgets.value, color, 0);
-    lv_obj_set_style_bg_color(widgets.bar, color, LV_PART_INDICATOR);
-    animate_usage_bar(widgets.bar, window.used_percent);
-    if (widgets.reset != nullptr) {
-        char countdown[16]{};
-        format_countdown(
-            window.has_reset, window.reset_at, epoch,
-            countdown, sizeof(countdown));
-        lv_label_set_text_fmt(widgets.reset, "RESET %s", countdown);
-        lv_obj_set_style_text_color(
-            widgets.reset, lv_color_hex(fresh ? COLOR_RESET : COLOR_DIM), 0);
     }
 }
 
@@ -1439,35 +1562,98 @@ void DisplayUi::update_provider(
 {
     const auto state = model.display_state(provider, connected);
     const auto& snapshot = model.snapshot(provider);
-    if (widgets.status != nullptr) {
-        if (state == DisplayState::Online && widgets.compact) {
-            char countdown[16]{};
-            format_countdown(snapshot.short_window.has_reset,
-                snapshot.short_window.reset_at, model.estimated_epoch(provider, now_ms),
-                countdown, sizeof(countdown));
-            lv_label_set_text_fmt(widgets.status, "SHORT RESET %s", countdown);
-        } else if (!widgets.compact && state == DisplayState::Online) {
-            const uint32_t epoch = model.estimated_epoch(provider, now_ms);
-            const uint32_t age = epoch > snapshot.sampled_at
-                ? epoch - snapshot.sampled_at : 0;
-            lv_label_set_text_fmt(widgets.status, "LAST %luS AGO",
-                static_cast<unsigned long>(age));
-        } else {
-            lv_label_set_text(widgets.status, display_state_name(state));
-        }
-        lv_obj_set_style_text_color(widgets.status, state_color(state), 0);
-    }
-
+    const bool partial = snapshot.source_state == SourceState::Partial;
+    const bool fresh = state == DisplayState::Online || state == DisplayState::Partial;
+    const bool short_present = snapshot.has_valid_data &&
+        snapshot.short_window.present && (!partial || snapshot.latest_short_present);
+    const bool week_present = snapshot.has_valid_data &&
+        snapshot.week_window.present && (!partial || snapshot.latest_week_present);
     const uint32_t epoch =
         snapshot.has_valid_data ? model.estimated_epoch(provider, now_ms) : 0;
-    const bool fresh = state == DisplayState::Online || state == DisplayState::Partial;
-    const bool partial = snapshot.source_state == SourceState::Partial;
-    update_metric(
-        widgets.short_window, snapshot.short_window,
-        snapshot.has_valid_data && (!partial || snapshot.latest_short_present), epoch, fresh);
-    update_metric(
-        widgets.week_window, snapshot.week_window,
-        snapshot.has_valid_data && (!partial || snapshot.latest_week_present), epoch, fresh);
+    const uint32_t accent = provider_color(provider);
+    const uint8_t short_pct = snapshot.short_window.used_percent;
+    const uint8_t week_pct = snapshot.week_window.used_percent;
+
+    // Rings: severity tiers override the provider colour; a stale sample
+    // keeps its arcs but fades them so it cannot pass for live data.
+    const uint8_t stale_mix = fresh ? uint8_t{LV_OPA_COVER} : STALE_RING_MIX;
+    lv_obj_set_style_arc_color(
+        widgets.ring.outer,
+        mix_with_black(ring_color_hex(short_pct, accent), stale_mix),
+        LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(
+        widgets.ring.inner,
+        mix_with_black(ring_color_hex(week_pct, accent),
+                       fresh ? INNER_RING_MIX : STALE_RING_MIX / 2),
+        LV_PART_INDICATOR);
+    set_ring_value(widgets.ring.outer, short_present ? short_pct : 0, true);
+    set_ring_value(widgets.ring.inner, week_present ? week_pct : 0, true);
+
+    set_percent_text(widgets.ring.value, short_present, short_pct);
+    lv_obj_set_style_text_color(
+        widgets.ring.value,
+        lv_color_hex(short_present && fresh ? COLOR_TEXT : COLOR_DIM), 0);
+    lv_obj_set_style_bg_color(
+        widgets.name_dot, lv_color_hex(fresh ? accent : COLOR_DIM), 0);
+
+    char countdown[16]{};
+    if (short_present) {
+        format_countdown(snapshot.short_window.has_reset,
+            snapshot.short_window.reset_at, epoch, countdown, sizeof(countdown));
+        lv_label_set_text(widgets.short_reset, countdown);
+    } else {
+        lv_label_set_text(widgets.short_reset, "--");
+    }
+    lv_obj_set_style_text_color(
+        widgets.short_reset,
+        lv_color_hex(short_present && fresh ? COLOR_TEXT : COLOR_DIM), 0);
+
+    if (widgets.compact) {
+        set_percent_text(widgets.week_value, week_present, week_pct);
+        lv_obj_set_style_text_color(
+            widgets.week_value,
+            lv_color_hex(!week_present || !fresh ? COLOR_DIM
+                         : usage_color_hex(week_pct)), 0);
+        lv_label_set_text(
+            widgets.status,
+            state == DisplayState::Online ? "" : display_state_name(state));
+        return;
+    }
+
+    if (week_present) {
+        format_countdown(snapshot.week_window.has_reset,
+            snapshot.week_window.reset_at, epoch, countdown, sizeof(countdown));
+        lv_label_set_text(widgets.week_value, countdown);
+        lv_label_set_text_fmt(widgets.week_caption, "WEEK %u%%", week_pct);
+    } else {
+        lv_label_set_text(widgets.week_value, "--");
+        lv_label_set_text(widgets.week_caption, "WEEK --");
+    }
+    lv_obj_set_style_text_color(
+        widgets.week_value,
+        lv_color_hex(week_present && fresh ? COLOR_TEXT : COLOR_DIM), 0);
+    lv_obj_set_style_bg_color(
+        widgets.short_legend,
+        mix_with_black(ring_color_hex(short_pct, accent),
+                       fresh ? uint8_t{LV_OPA_COVER} : STALE_RING_MIX), 0);
+    lv_obj_set_style_bg_color(
+        widgets.week_legend,
+        mix_with_black(ring_color_hex(week_pct, accent),
+                       fresh ? INNER_RING_MIX : STALE_RING_MIX / 2), 0);
+
+    if (state == DisplayState::Online) {
+        const uint32_t age = epoch > snapshot.sampled_at ? epoch - snapshot.sampled_at : 0;
+        if (age < 60) {
+            lv_label_set_text_fmt(widgets.status, "UPDATED %luS AGO",
+                static_cast<unsigned long>(age));
+        } else {
+            lv_label_set_text_fmt(widgets.status, "UPDATED %luM AGO",
+                static_cast<unsigned long>(age / 60));
+        }
+    } else {
+        lv_label_set_text(widgets.status, display_state_name(state));
+    }
+    lv_obj_set_style_text_color(widgets.status, state_color(state), 0);
 }
 
 bool DisplayUi::set_transition_brightness(int32_t percent)

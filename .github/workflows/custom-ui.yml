@@ -1,0 +1,112 @@
+name: Custom UI build
+
+# Builds what this fork ships: the Waveshare AMOLED 2.16 firmware with the ring
+# UI, and an Apple Silicon Bridge whose update checks point at this fork.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - custom-ui
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TARGET_PATH: firmware/targets/esp32_s3_touch_amoled_216
+
+jobs:
+  bridge-tests:
+    name: Bridge tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install and test Bridge
+        run: |
+          python -m pip install --disable-pip-version-check ./bridge
+          PYTHONPATH=bridge/src:. python -m unittest discover -s bridge/tests -v
+
+  firmware:
+    name: Firmware (Waveshare AMOLED 2.16)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.1@sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build firmware image
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          . "$IDF_PATH/export.sh"
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' bridge/src/quotaframe_bridge/__init__.py)
+          idf.py -C "$TARGET_PATH" -D PROJECT_VER="${version}-ui" build
+          idf.py -C "$TARGET_PATH" merge-bin -o ws_usage_panel_full.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-waveshare-amoled-216
+          path: |
+            ${{ env.TARGET_PATH }}/build/ws_usage_panel.bin
+            ${{ env.TARGET_PATH }}/build/ws_usage_panel_full.bin
+          if-no-files-found: error
+          retention-days: 30
+
+  bridge-macos:
+    name: Apple Silicon Bridge
+    needs: bridge-tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13.14"
+      - name: Build application bundle
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check ./bridge
+          ./bridge/build_app.sh --release-repository "${{ github.repository }}" --python python
+      - name: Build DMG installer
+        shell: bash
+        run: |
+          ./bridge/build_dmg.sh \
+            --app "bridge/dist/QuotaFrame Bridge.app" \
+            --output "bridge/dist/quotaframe-bridge-macos-arm64-custom-ui.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-macos
+          path: bridge/dist/quotaframe-bridge-macos-arm64-custom-ui.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish build as a pre-release
+    needs: [firmware, bridge-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Replace the rolling pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: custom-ui-latest
+        shell: bash
+        run: |
+          ls -la dist
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --title "Custom UI build" \
+            --notes "Waveshare AMOLED 2.16 firmware with the ring UI for Codex and Claude, and the Apple Silicon Bridge. Built from ${GITHUB_SHA}." \
+            dist/ws_usage_panel_full.bin dist/ws_usage_panel.bin \
+            dist/quotaframe-bridge-macos-arm64-custom-ui.dmg

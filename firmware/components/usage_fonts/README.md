@@ -1,6 +1,6 @@
 # Montserrat LVGL subsets
 
-This directory contains generated LVGL 9 fonts for the screensaver. The Bold 120 px glyph set is `0123456789:-`. Semibold 13 px and 20 px subsets provide the approved uppercase hint, low-battery label, and date typography; the 13 px subset also carries `%` for the screensaver usage percentages. All files use 4 bits per pixel without compression.
+This directory contains generated LVGL 9 fonts for the screensaver and the usage rings. The Bold 120 px glyph set is `0123456789:-`; the Bold 40 px and 56 px subsets carry `0123456789%-` for the ring percentages. Semibold 13 px and 20 px subsets provide the approved uppercase hint, low-battery label, and date typography; the 13 px subset also carries `%` for the screensaver usage percentages. All files use 4 bits per pixel without compression.
 
 ## Provenance
 
@@ -29,6 +29,8 @@ $env:PYTHONPATH = $fontToolsDir
 python -m fontTools.varLib.instancer $sourceFont 'wght=700' --output $boldFont
 python -m fontTools.varLib.instancer $sourceFont 'wght=600' --output $semiboldFont
 pnpm dlx lv_font_conv@1.5.3 --font $boldFont --symbols '0123456789:-' --size 120 --format lvgl --bpp 4 --no-compress --lv-include 'lvgl.h' --lv-font-name montserrat_bold_120 --output 'firmware/components/usage_fonts/montserrat_bold_120.c'
+pnpm dlx lv_font_conv@1.5.3 --font $boldFont --symbols '0123456789%-' --size 40 --format lvgl --bpp 4 --no-compress --lv-include 'lvgl.h' --lv-font-name montserrat_bold_40 --output 'firmware/components/usage_fonts/montserrat_bold_40.c'
+pnpm dlx lv_font_conv@1.5.3 --font $boldFont --symbols '0123456789%-' --size 56 --format lvgl --bpp 4 --no-compress --lv-include 'lvgl.h' --lv-font-name montserrat_bold_56 --output 'firmware/components/usage_fonts/montserrat_bold_56.c'
 pnpm dlx lv_font_conv@1.5.3 --font $semiboldFont --symbols ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-%' --size 13 --format lvgl --bpp 4 --no-compress --lv-include 'lvgl.h' --lv-font-name montserrat_semibold_13 --output 'firmware/components/usage_fonts/montserrat_semibold_13.c'
 pnpm dlx lv_font_conv@1.5.3 --font $semiboldFont --symbols ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-' --size 20 --format lvgl --bpp 4 --no-compress --lv-include 'lvgl.h' --lv-font-name montserrat_semibold_20 --output 'firmware/components/usage_fonts/montserrat_semibold_20.c'
 ```

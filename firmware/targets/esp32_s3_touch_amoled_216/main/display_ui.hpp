@@ -80,18 +80,36 @@ public:
             false, std::memory_order_relaxed);
     }
 
-    struct MetricWidgets {
+    /**
+     * Concentric usage rings: the outer arc is the short (5-hour) window and
+     * the inner arc the weekly window, with the short percentage centred.
+     */
+    struct RingWidgets {
+        lv_obj_t* outer = nullptr;
+        lv_obj_t* inner = nullptr;
         lv_obj_t* value = nullptr;
-        lv_obj_t* reset = nullptr;
-        lv_obj_t* bar = nullptr;
     };
 
+    /**
+     * Widgets for one provider. The overview card (compact) and the detail
+     * page share this shape; members a layout does not use stay null.
+     */
     struct ProviderWidgets {
         bool compact = false;
         lv_obj_t* panel = nullptr;
+        // Overview: state text below the stats, empty while online.
+        // Detail: sample age or state, right-aligned in the title row.
         lv_obj_t* status = nullptr;
-        MetricWidgets short_window;
-        MetricWidgets week_window;
+        lv_obj_t* name_dot = nullptr;
+        RingWidgets ring;
+        lv_obj_t* short_reset = nullptr;
+        // Overview: weekly percentage. Detail: weekly reset countdown.
+        lv_obj_t* week_value = nullptr;
+        // Detail only: weekly percentage under the centred value, and the
+        // legend dots that tie each reset countdown to its ring.
+        lv_obj_t* week_caption = nullptr;
+        lv_obj_t* short_legend = nullptr;
+        lv_obj_t* week_legend = nullptr;
     };
 
     struct TabBinding {
@@ -121,8 +139,6 @@ private:
     void show_page(Page page, bool animate);
     void update_provider(ProviderWidgets& widgets, const UsageModel& model,
                          Provider provider, bool connected, uint64_t now_ms);
-    void update_metric(MetricWidgets& widgets, const UsageWindow& window,
-                       bool has_data, uint32_t epoch, bool fresh);
     void update_screensaver_usage(const ScreensaverUsageView& usage);
 
     bool set_transition_brightness(int32_t percent);

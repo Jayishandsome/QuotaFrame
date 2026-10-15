@@ -1,5 +1,7 @@
 idf_component_register(
     SRCS
+        "montserrat_bold_40.c"
+        "montserrat_bold_56.c"
         "montserrat_bold_120.c"
         "montserrat_semibold_13.c"
         "montserrat_semibold_20.c"

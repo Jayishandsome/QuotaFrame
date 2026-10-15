@@ -225,6 +225,7 @@ class FirmwareConfigurationTests(unittest.TestCase):
             "CONFIG_LV_USE_CLIB_STRING": "y",
             "CONFIG_LV_USE_CLIB_SPRINTF": "y",
             "CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM": "n",
+            "CONFIG_LV_USE_ARC": "y",
             "CONFIG_LV_USE_BAR": "y",
             "CONFIG_LV_USE_BUTTON": "y",
             "CONFIG_LV_USE_LABEL": "y",
@@ -246,7 +247,6 @@ class FirmwareConfigurationTests(unittest.TestCase):
 
         unused_widgets = (
             "CONFIG_LV_USE_ANIMIMG",
-            "CONFIG_LV_USE_ARC",
             "CONFIG_LV_USE_BUTTONMATRIX",
             "CONFIG_LV_USE_CALENDAR",
             "CONFIG_LV_USE_CANVAS",
