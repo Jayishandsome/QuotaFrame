@@ -117,10 +117,10 @@ class FirmwareConfigurationTests(unittest.TestCase):
         self.assertIn("screensaver_panel_", header)
         self.assertIn("montserrat_bold_120", source)
         self.assertIn("lv_obj_set_size(screensaver_panel_, SCREEN_W, SCREEN_H)", source)
-        for label in ('"OVERVIEW"', '"CODEX"', '"CLAUDE"'):
+        for label in ('"ALL"', '"CODEX"', '"CLAUDE"', '"GEMINI"', '"GROK"'):
             self.assertIn(label, source)
         self.assertIn(
-            "enum class Page : uint8_t { Overview, Codex, Claude };",
+            "enum class Page : uint8_t { Overview, Codex, Claude, Gemini, Grok };",
             page_state,
         )
 

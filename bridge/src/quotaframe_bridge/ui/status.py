@@ -8,7 +8,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from quotaframe_bridge.i18n import tr
-from quotaframe_bridge.domain.models import Provider, ProviderUsage, SourceState
+from quotaframe_bridge.domain.models import (
+    BASE_PROVIDERS,
+    Provider,
+    ProviderUsage,
+    SourceState,
+)
 
 TOOLTIP_PREFIX = "QuotaFrame"
 TOOLTIP_LIMIT = 127
@@ -19,7 +24,12 @@ SEPARATOR = " · "
 NO_DEVICES_TEXT = tr("no_devices")
 NO_DEVICES_SCANNING_TEXT = tr("no_devices_scanning")
 
-_PROVIDER_LABELS = {Provider.CODEX: "Codex", Provider.CLAUDE: "Claude"}
+_PROVIDER_LABELS = {
+    Provider.CODEX: "Codex",
+    Provider.CLAUDE: "Claude",
+    Provider.GEMINI: "Gemini",
+    Provider.GROK: "Grok",
+}
 
 
 class TrayState(enum.Enum):
@@ -91,6 +101,12 @@ class PanelStatus:
         ):
             return TrayState.WARN
         return TrayState.OK
+
+
+def _has_usage(usage: ProviderUsage | None) -> bool:
+    """Whether a provider has data worth a tray entry of its own."""
+
+    return usage is not None and usage.state is not SourceState.UNAVAILABLE
 
 
 def _provider_text(provider: Provider, usage: ProviderUsage | None) -> str:
@@ -167,7 +183,9 @@ def format_info_lines(status: PanelStatus) -> tuple[str, str]:
         )
     )
     providers = SEPARATOR.join(
-        _provider_text(provider, status.providers.get(provider)) for provider in Provider
+        _provider_text(provider, status.providers.get(provider))
+        for provider in Provider
+        if provider in BASE_PROVIDERS or _has_usage(status.providers.get(provider))
     )
     if status.devices_unreadable:
         devices = tr("devices_unreadable")

@@ -7,10 +7,21 @@ from enum import Enum
 
 
 class Provider(str, Enum):
-    """Usage providers supported by protocol version 1."""
+    """Usage providers supported by protocol version 1.
+
+    GEMINI and GROK are sent only to devices that advertise
+    `EXTRA_PROVIDERS_CAPABILITY`; earlier firmware rejects them.
+    """
 
     CODEX = "codex"
     CLAUDE = "claude"
+    GEMINI = "gemini"
+    GROK = "grok"
+
+
+# Device capability token announcing that the usage parser accepts GEMINI/GROK.
+EXTRA_PROVIDERS_CAPABILITY = "usage.gemini_grok.v1"
+BASE_PROVIDERS = (Provider.CODEX, Provider.CLAUDE)
 
 
 class SourceState(str, Enum):

@@ -81,6 +81,9 @@ public:
     }
 
     struct MetricWidgets {
+        // Caption or card that frames the metric; hidden with the metric when
+        // the provider does not report this window.
+        lv_obj_t* frame = nullptr;
         lv_obj_t* value = nullptr;
         lv_obj_t* reset = nullptr;
         lv_obj_t* bar = nullptr;
@@ -170,9 +173,9 @@ private:
     lv_obj_t* charge_symbol_ = nullptr;
     lv_obj_t* battery_segments_[4]{};
     lv_obj_t* overview_panel_ = nullptr;
-    ProviderWidgets overview_[2]{};
-    ProviderWidgets provider_pages_[2]{};
-    lv_obj_t* nav_labels_[3]{};
+    ProviderWidgets overview_[kProviderCount]{};
+    ProviderWidgets provider_pages_[kProviderCount]{};
+    lv_obj_t* nav_labels_[kPageCount]{};
     // One underline shared by the three tabs, slid between them by a translate
     // transform. It is built parked under Page::Overview, so shown_page_ starts
     // there and that page's translation is zero.
@@ -184,7 +187,7 @@ private:
     lv_obj_t* screensaver_weekday_ = nullptr;
     lv_obj_t* screensaver_month_day_ = nullptr;
     lv_obj_t* screensaver_hint_ = nullptr;
-    ScreensaverUsageWidgets screensaver_usage_[2]{};
+    ScreensaverUsageWidgets screensaver_usage_[kProviderCount]{};
     lv_obj_t* screensaver_low_group_ = nullptr;
     lv_obj_t* screensaver_low_segments_[4]{};
     lv_obj_t* pairing_panel_ = nullptr;
@@ -208,7 +211,7 @@ private:
     int64_t probe_refresh_started_us_ = 0;
     bool probe_refresh_active_ = false;
 #endif
-    TabBinding tab_bindings_[3]{};
+    TabBinding tab_bindings_[kPageCount]{};
 };
 
 }  // namespace usage_panel::amoled

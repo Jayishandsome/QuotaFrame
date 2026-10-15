@@ -17,36 +17,36 @@ const char* page_name(Page page)
     switch (page) {
     case Page::Codex: return "codex";
     case Page::Claude: return "claude";
+    case Page::Gemini: return "gemini";
+    case Page::Grok: return "grok";
     default: return "overview";
     }
 }
 
+Page page_for_provider(Provider provider)
+{
+    return static_cast<Page>(provider_index(provider) + 1);
+}
+
+Provider provider_for_page(Page page)
+{
+    const size_t index = static_cast<size_t>(page);
+    return index >= 1 && index < kPageCount ? kProviders[index - 1]
+                                            : Provider::Codex;
+}
+
 Page page_from_tab(uint8_t tab_index, Page fallback)
 {
-    switch (tab_index) {
-    case 0: return Page::Overview;
-    case 1: return Page::Codex;
-    case 2: return Page::Claude;
-    default: return fallback;
-    }
+    return tab_index < kPageCount ? static_cast<Page>(tab_index) : fallback;
 }
 
 Page page_after_swipe(Page page, SwipeDirection direction)
 {
-    if (direction == SwipeDirection::Previous) {
-        switch (page) {
-        case Page::Overview: return Page::Claude;
-        case Page::Codex: return Page::Overview;
-        case Page::Claude: return Page::Codex;
-        default: return Page::Overview;
-        }
-    }
-
-    switch (page) {
-    case Page::Overview: return Page::Codex;
-    case Page::Codex: return Page::Claude;
-    default: return Page::Overview;
-    }
+    const size_t index = static_cast<size_t>(page) % kPageCount;
+    const size_t next = direction == SwipeDirection::Next
+        ? (index + 1) % kPageCount
+        : (index + kPageCount - 1) % kPageCount;
+    return static_cast<Page>(next);
 }
 
 }  // namespace usage_panel

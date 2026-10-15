@@ -1,16 +1,10 @@
 #include "usage_panel_state/screensaver_usage.hpp"
 
-#include <initializer_list>
 
 namespace usage_panel {
 namespace {
 constexpr uint8_t WARN_PERCENT = 80;
 constexpr uint8_t BAD_PERCENT  = 95;
-
-size_t row_index(Provider provider)
-{
-    return provider == Provider::Codex ? 0 : 1;
-}
 }  // namespace
 
 bool ScreensaverUsageRow::operator==(const ScreensaverUsageRow& other) const
@@ -21,8 +15,10 @@ bool ScreensaverUsageRow::operator==(const ScreensaverUsageRow& other) const
 
 bool ScreensaverUsageView::operator==(const ScreensaverUsageView& other) const
 {
-    return rows[0] == other.rows[0] && rows[1] == other.rows[1] &&
-           offline == other.offline;
+    for (size_t i = 0; i < kProviderCount; ++i) {
+        if (!(rows[i] == other.rows[i])) return false;
+    }
+    return offline == other.offline;
 }
 
 ScreensaverUsageLevel screensaver_usage_level(uint8_t percent)
@@ -61,18 +57,23 @@ ScreensaverUsageRow make_screensaver_usage_row(const UsageModel& model, Provider
 ScreensaverUsageView make_screensaver_usage_view(const UsageModel& model, bool connected)
 {
     ScreensaverUsageView view{};
-    for (Provider provider : {Provider::Codex, Provider::Claude}) {
-        view.rows[row_index(provider)] = make_screensaver_usage_row(model, provider, connected);
+    bool any_percent = false;
+    bool any_data = false;
+    for (Provider provider : kProviders) {
+        ScreensaverUsageRow& row = view.rows[provider_index(provider)];
+        row = make_screensaver_usage_row(model, provider, connected);
+        any_percent = any_percent || row.show_percent;
+        any_data = any_data || row.has_data;
     }
 
-    // Showing both labels keeps the shared columns aligned during an alert.
-    if (view.rows[0].show_percent || view.rows[1].show_percent) {
+    // Showing every label keeps the shared columns aligned during an alert.
+    if (any_percent) {
         for (ScreensaverUsageRow& row : view.rows) {
             if (row.has_data) row.show_percent = true;
         }
     }
 
-    view.offline = !view.rows[0].has_data && !view.rows[1].has_data;
+    view.offline = !any_data;
     return view;
 }
 

@@ -6,11 +6,13 @@ namespace usage_panel {
 
 bool TimedRenderKey::operator==(const TimedRenderKey& other) const
 {
+    for (size_t i = 0; i < kProviderCount; ++i) {
+        if (states[i] != other.states[i] ||
+            std::strcmp(overview_countdowns[i], other.overview_countdowns[i]) != 0) {
+            return false;
+        }
+    }
     return page == other.page &&
-           first_state == other.first_state &&
-           second_state == other.second_state &&
-           std::strcmp(overview_countdowns[0], other.overview_countdowns[0]) == 0 &&
-           std::strcmp(overview_countdowns[1], other.overview_countdowns[1]) == 0 &&
            std::strcmp(short_countdown, other.short_countdown) == 0 &&
            std::strcmp(week_countdown, other.week_countdown) == 0 &&
            presentation == other.presentation;
@@ -24,29 +26,31 @@ TimedRenderKey make_timed_render_key(
     key.page = page;
     key.presentation = presentation;
 
-    // Both providers remain visible in the overview and screensaver, even
+    // Every provider remains visible in the overview and screensaver, even
     // when the screensaver was entered from a single-provider detail page.
     if (page == Page::Overview || presentation.screensaver.active) {
-        key.first_state = model.display_state(Provider::Codex, connected);
-        key.second_state = model.display_state(Provider::Claude, connected);
-        if (!presentation.screensaver.active) {
-            const Provider providers[] = {Provider::Codex, Provider::Claude};
-            const DisplayState states[] = {key.first_state, key.second_state};
-            for (size_t i = 0; i < 2; ++i) {
-                // Non-online cards display status text instead of a countdown.
-                if (states[i] != DisplayState::Online) continue;
-                const auto& window = model.snapshot(providers[i]).short_window;
-                format_countdown(window.has_reset, window.reset_at,
-                    model.estimated_epoch(providers[i], now_ms),
-                    key.overview_countdowns[i], sizeof(key.overview_countdowns[i]));
-            }
+        for (size_t i = 0; i < kProviderCount; ++i) {
+            const Provider provider = kProviders[i];
+            key.states[i] = model.display_state(provider, connected);
+            // Non-online cards display status text instead of a countdown.
+            // Single-window providers only ever publish partial samples, so
+            // for them a partial card counts as online.
+            const bool single_window =
+                provider_window_labels(provider).week_compact == nullptr;
+            const bool counts_down =
+                key.states[i] == DisplayState::Online ||
+                (single_window && key.states[i] == DisplayState::Partial);
+            if (presentation.screensaver.active || !counts_down) continue;
+            const auto& window = model.snapshot(provider).short_window;
+            format_countdown(window.has_reset, window.reset_at,
+                model.estimated_epoch(provider, now_ms),
+                key.overview_countdowns[i], sizeof(key.overview_countdowns[i]));
         }
         return key;
     }
 
-    const Provider provider =
-        page == Page::Codex ? Provider::Codex : Provider::Claude;
-    key.first_state = model.display_state(provider, connected);
+    const Provider provider = provider_for_page(page);
+    key.states[0] = model.display_state(provider, connected);
 
     const auto& snapshot = model.snapshot(provider);
     if (!snapshot.has_valid_data) {

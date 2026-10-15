@@ -34,7 +34,7 @@ from quotaframe_bridge.sources.codexbar_mac import (
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "codexbar_mac_both.json"
 FIXTURE = FIXTURE_PATH.read_text(encoding="utf-8")
 
-USAGE_ARGV = ("usage", "--provider", "both", "--format", "json")
+USAGE_ARGV = ("usage", "--format", "json")
 VERSION_STDOUT = "CodexBar 0.17.0\n"
 
 

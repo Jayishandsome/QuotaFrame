@@ -9,9 +9,10 @@ Contract confirmed against upstream source, not only `docs/cli.md`:
 - `usage --format json` prints provider payloads as a JSON **array**
   (`CLIUsageCommand.printJSON` receives `[ProviderPayload]`). The single-object
   sample in `docs/cli.md` is a simplification, so a bare object is accepted too.
-- `--provider both` asks upstream for its primary providers. The parser remains
-  limited to this project's supported providers, Codex and Claude, and ignores
-  any unrelated provider records rather than widening the protocol surface.
+- Omitting `--provider` asks upstream for every provider enabled in its config.
+  The parser remains limited to this project's supported providers (Codex,
+  Claude, Gemini and Grok) and ignores any unrelated provider records rather
+  than widening the protocol surface.
 - `RateWindow` carries `usedPercent`, `windowMinutes`, `resetsAt`, and
   `isSyntheticPlaceholder`; the last one marks a lane the provider never
   actually reported (Claude web can report a phantom 0% session window when the
@@ -185,7 +186,9 @@ MACOS_DIALECT = CliDialect(
     install_hint=INSTALL_HINT,
     candidate_names=_PATH_CANDIDATE_NAMES,
     installed_paths=installed_paths,
-    usage_argv=("usage", "--provider", "both", "--format", "json"),
+    # Without --provider, upstream queries the providers enabled in its config,
+    # which is how Gemini and Grok are selected alongside Codex and Claude.
+    usage_argv=("usage", "--format", "json"),
     identity_pattern=_CODEXBAR_VERSION,
     parse=parse_codexbar_mac_json,
     reports_provider_failure_in_exit_code=True,

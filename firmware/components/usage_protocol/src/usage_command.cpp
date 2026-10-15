@@ -66,6 +66,10 @@ UsageCommandParseResult parse_usage_command(
         result.update.provider = Provider::Codex;
     } else if (strcmp(provider_text, "claude") == 0) {
         result.update.provider = Provider::Claude;
+    } else if (strcmp(provider_text, "gemini") == 0) {
+        result.update.provider = Provider::Gemini;
+    } else if (strcmp(provider_text, "grok") == 0) {
+        result.update.provider = Provider::Grok;
     } else {
         return result;
     }

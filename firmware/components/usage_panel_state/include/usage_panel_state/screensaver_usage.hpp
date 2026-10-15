@@ -30,11 +30,11 @@ struct ScreensaverUsageRow {
     bool operator==(const ScreensaverUsageRow& other) const;
 };
 
-/** Both underlines plus the hint text they imply. */
+/** All provider underlines plus the hint text they imply. */
 struct ScreensaverUsageView {
-    // Indexed like the other provider arrays: 0 is CODEX, 1 is CLAUDE.
-    ScreensaverUsageRow rows[2]{};
-    bool offline = false;  // True when neither row has data.
+    // Indexed like the other provider arrays, in kProviders order.
+    ScreensaverUsageRow rows[kProviderCount]{};
+    bool offline = false;  // True when no row has data.
 
     bool operator==(const ScreensaverUsageView& other) const;
 };

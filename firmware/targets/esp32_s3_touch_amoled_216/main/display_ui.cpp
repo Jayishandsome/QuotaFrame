@@ -1,7 +1,6 @@
 #include "display_ui.hpp"
 
 #include <cstdio>
-#include <initializer_list>
 
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
@@ -47,27 +46,36 @@ constexpr uint32_t COLOR_SAVER_BAD   = COLOR_MUTED;
 constexpr int MARGIN      = 24;
 constexpr int CARD_W      = 432;
 constexpr int CARD_PAD    = 20;
-constexpr int OVERVIEW_PAD = 18;
 constexpr int CARD_RADIUS = 16;
 constexpr int HEADER_H    = 50;
 constexpr int BAR_H_OVERVIEW = 12;
 constexpr int BAR_H_DETAIL   = 16;
 constexpr int NAV_H       = 34;
 constexpr int NAV_Y       = 436;
-constexpr int NAV_GAP     = 6;
+constexpr int NAV_GAP     = 8;
 constexpr int NAV_BAR_W   = 26;
 constexpr int NAV_BAR_H   = 2;
 constexpr int NAV_LABEL_GAP = 7;
-// The three tabs share the row with flex-grow 1, so their width is exact only
-// while the remaining space divides evenly. The shared underline is placed from
-// these numbers rather than from resolved geometry, which keeps it independent
-// of when the flex pass runs; the assert is what makes that safe.
-static_assert((CARD_W - 2 * NAV_GAP) % 3 == 0,
+// The tabs share the row with flex-grow 1, so their width is exact only while
+// the remaining space divides evenly. The shared underline is placed from these
+// numbers rather than from resolved geometry, which keeps it independent of
+// when the flex pass runs; the assert is what makes that safe.
+constexpr int NAV_TAB_COUNT = static_cast<int>(kPageCount);
+static_assert((CARD_W - (NAV_TAB_COUNT - 1) * NAV_GAP) % NAV_TAB_COUNT == 0,
               "navigation tabs must divide the row evenly");
-constexpr int NAV_TAB_W   = (CARD_W - 2 * NAV_GAP) / 3;
+constexpr int NAV_TAB_W =
+    (CARD_W - (NAV_TAB_COUNT - 1) * NAV_GAP) / NAV_TAB_COUNT;
 constexpr int NAV_TAB_PITCH = NAV_TAB_W + NAV_GAP;
 constexpr int NAV_BAR_X   = (NAV_TAB_W - NAV_BAR_W) / 2;
 constexpr int PAIRING_BOTTOM = 52;
+// Overview: a 2x2 grid of provider cards inside the content area.
+constexpr int GRID_GAP    = 12;
+constexpr int GRID_TOP    = 14;
+constexpr int GRID_CARD_W = (CARD_W - GRID_GAP) / 2;
+constexpr int GRID_CARD_H = 174;
+constexpr int GRID_PAD    = 16;
+constexpr int GRID_INNER_W = GRID_CARD_W - 2 * GRID_PAD;
+static_assert(2 * GRID_CARD_W + GRID_GAP == CARD_W);
 constexpr int SCREEN_W    = 480;
 constexpr int SCREEN_H    = 480;
 constexpr int BATTERY_GROUP_W = 44;
@@ -88,11 +96,11 @@ constexpr int OTA_WAIT_TITLE_Y   = 210;
 constexpr int OTA_WAIT_DETAIL_Y  = 258;
 constexpr int OTA_FAIL_ROW_Y     = 200;
 constexpr int OTA_FAIL_DETAIL_Y  = 254;
-constexpr int SAVER_CLOCK_Y      = 133;
+constexpr int SAVER_CLOCK_Y      = 115;
 constexpr int SAVER_CLOCK_H      = 88;   // montserrat_bold_120 line height
-constexpr int SAVER_DATE_Y       = 271;
+constexpr int SAVER_DATE_Y       = 253;
 constexpr int SAVER_DATE_H       = 28;
-constexpr int SAVER_USAGE_Y      = 320;
+constexpr int SAVER_USAGE_Y      = 302;
 constexpr int SAVER_ROW_H        = 16;
 constexpr int SAVER_ROW_GAP      = 2;
 constexpr int SAVER_BAR_W        = 220;
@@ -122,12 +130,13 @@ static_assert(
     SCREEN_W);
 static_assert(SAVER_PCT_X + SAVER_PCT_W <= SAVER_USAGE_W);
 static_assert(SAVER_PCT_Y + 12 <= SAVER_ROW_H);  // 12 px is the font's line height.
-// Ink runs from the top of the clock to the middle of the lower bar. Equal
+// Ink runs from the top of the clock to the middle of the lowest bar. Equal
 // margins top and bottom mean the block is centred; the wake hint is excluded
 // because it fades out and is not part of the resting composition.
 constexpr int SAVER_INK_TOP    = SAVER_CLOCK_Y;
 constexpr int SAVER_INK_BOTTOM =
-    SAVER_USAGE_Y + SAVER_ROW_H + SAVER_ROW_GAP + (SAVER_ROW_H + SAVER_BAR_H) / 2;
+    SAVER_USAGE_Y + (static_cast<int>(kProviderCount) - 1) * (SAVER_ROW_H + SAVER_ROW_GAP) +
+    (SAVER_ROW_H + SAVER_BAR_H) / 2;
 static_assert(SAVER_INK_TOP + SAVER_INK_BOTTOM == SCREEN_H);
 static_assert(SAVER_CLOCK_Y + SAVER_CLOCK_H < SAVER_DATE_Y);
 static_assert(SAVER_DATE_Y + SAVER_DATE_H <= SAVER_USAGE_Y);
@@ -318,11 +327,6 @@ esp_err_t apply_touch_mapping(
            mirror_x_error != ESP_OK ? mirror_x_error : mirror_y_error;
 }
 
-size_t provider_index(Provider provider)
-{
-    return provider == Provider::Codex ? 0 : 1;
-}
-
 constexpr uint32_t usage_color_hex(uint8_t percent)
 {
     return percent >= 95 ? COLOR_BAD : percent >= 80 ? COLOR_WARN : COLOR_TEXT;
@@ -414,24 +418,30 @@ void nav_indicator_slide(void* target, int32_t translate_x)
 }
 
 void build_compact_metric(lv_obj_t* parent, const char* name,
+                           int x, int width,
                            int label_y, int value_y, int bar_y,
                            DisplayUi::MetricWidgets& widgets)
 {
     lv_obj_t* label = make_label(
-        parent, name, OVERVIEW_PAD, label_y,
+        parent, name != nullptr ? name : "", x, label_y,
         &lv_font_montserrat_14, COLOR_MUTED);
     lv_obj_set_style_text_letter_space(label, 1, 0);
+    widgets.frame = label;
     widgets.value =
-        make_label(parent, "--", OVERVIEW_PAD, value_y,
+        make_label(parent, "--", x, value_y,
                    &lv_font_montserrat_30);
-    lv_obj_set_width(widgets.value, CARD_W - 2 * OVERVIEW_PAD);
+    lv_obj_set_width(widgets.value, width);
     lv_obj_set_style_text_align(widgets.value, LV_TEXT_ALIGN_RIGHT, 0);
     widgets.bar = lv_bar_create(parent);
-    lv_obj_set_pos(widgets.bar, OVERVIEW_PAD, bar_y);
-    lv_obj_set_size(
-        widgets.bar, CARD_W - 2 * OVERVIEW_PAD, BAR_H_OVERVIEW);
+    lv_obj_set_pos(widgets.bar, x, bar_y);
+    lv_obj_set_size(widgets.bar, width, BAR_H_OVERVIEW);
     style_bar(widgets.bar, BAR_H_OVERVIEW);
     lv_bar_set_value(widgets.bar, 0, LV_ANIM_OFF);
+    if (name == nullptr) {
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(widgets.value, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(widgets.bar, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void build_large_metric(lv_obj_t* parent, const char* name, int y,
@@ -441,8 +451,13 @@ void build_large_metric(lv_obj_t* parent, const char* name, int y,
     lv_obj_set_pos(card, MARGIN, y);
     lv_obj_set_size(card, CARD_W, 158);
     style_panel(card);
+    widgets.frame = card;
+    // A provider without this window keeps the widgets for uniform updates
+    // but never shows the card.
+    if (name == nullptr) lv_obj_add_flag(card, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t* label = make_label(
-        card, name, CARD_PAD, 16, &lv_font_montserrat_16, COLOR_MUTED);
+        card, name != nullptr ? name : "", CARD_PAD, 16,
+        &lv_font_montserrat_16, COLOR_MUTED);
     lv_obj_set_style_text_letter_space(label, 1, 0);
     widgets.reset =
         make_label(card, "", 220, 16, &lv_font_montserrat_16, COLOR_RESET);
@@ -492,8 +507,9 @@ bool DisplayUi::begin(ScreenRotation initial_rotation)
     lv_indev_add_event_cb(input_device_, long_press_event, LV_EVENT_LONG_PRESSED, this);
     build_header(screen);
     build_overview(screen);
-    build_provider_page(screen, Provider::Codex);
-    build_provider_page(screen, Provider::Claude);
+    for (Provider provider : kProviders) {
+        build_provider_page(screen, provider);
+    }
     build_navigation(screen);
     build_screensaver(screen);
     build_settings(screen);
@@ -622,11 +638,11 @@ void DisplayUi::start_next_probe_refresh()
         return;
     }
 
-    constexpr Page pages[] = {Page::Overview, Page::Codex, Page::Claude};
-    const uint32_t page_index = probe_refresh_sample_ % 3;
+    const auto page_index =
+        static_cast<uint8_t>(probe_refresh_sample_ % kPageCount);
     // The probe times forced full repaints; an underline animation would add
     // invalid areas to the very refreshes it is measuring.
-    show_page(pages[page_index], /*animate=*/false);
+    show_page(static_cast<Page>(page_index), /*animate=*/false);
     probe_refresh_started_us_ = esp_timer_get_time();
     lv_obj_invalidate(lv_screen_active());
 }
@@ -643,8 +659,8 @@ void DisplayUi::probe_refresh_event(lv_event_t* event)
     const uint32_t sample = ui->probe_refresh_sample_;
     ESP_LOGI(
         TAG, "MEMORY_PROBE refresh cycle=%u page=%u elapsed_us=%llu",
-        static_cast<unsigned>(sample / 3),
-        static_cast<unsigned>(sample % 3),
+        static_cast<unsigned>(sample / kPageCount),
+        static_cast<unsigned>(sample % kPageCount),
         static_cast<unsigned long long>(elapsed_us));
     ++ui->probe_refresh_sample_;
     ui->start_next_probe_refresh();
@@ -790,7 +806,7 @@ void DisplayUi::build_screensaver(lv_obj_t* screen)
         date_row, "-- --", 0, 0, &montserrat_semibold_20, COLOR_DIM);
     lv_obj_set_style_text_letter_space(screensaver_month_day_, 2, 0);
 
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < static_cast<int>(kProviderCount); ++i) {
         lv_obj_t* row = lv_obj_create(screensaver_content_);
         lv_obj_set_pos(
             row, SAVER_USAGE_X,
@@ -893,29 +909,34 @@ void DisplayUi::build_overview(lv_obj_t* screen)
     lv_obj_add_event_cb(
         overview_panel_, gesture_event, LV_EVENT_GESTURE, this);
 
-    const char* names[] = {"CODEX", "CLAUDE"};
-    for (size_t i = 0; i < 2; ++i) {
+    // Cards follow kProviders order: left to right, then top to bottom.
+    for (size_t i = 0; i < kProviderCount; ++i) {
         ProviderWidgets& widgets = overview_[i];
+        const int column = static_cast<int>(i % 2);
+        const int row = static_cast<int>(i / 2);
         widgets.panel = lv_obj_create(overview_panel_);
-        lv_obj_set_pos(widgets.panel, MARGIN, i == 0 ? 17 : 195);
-        lv_obj_set_size(widgets.panel, CARD_W, 166);
+        lv_obj_set_pos(
+            widgets.panel, MARGIN + column * (GRID_CARD_W + GRID_GAP),
+            GRID_TOP + row * (GRID_CARD_H + GRID_GAP));
+        lv_obj_set_size(widgets.panel, GRID_CARD_W, GRID_CARD_H);
         style_panel(widgets.panel);
         lv_obj_t* title = make_label(
-            widgets.panel, names[i], OVERVIEW_PAD, 14,
-            &lv_font_montserrat_20);
+            widgets.panel, provider_display_name(kProviders[i]),
+            GRID_PAD, 12, &lv_font_montserrat_20);
         lv_obj_set_style_text_letter_space(title, 1, 0);
         widgets.compact = true;
         widgets.status = make_label(
-            widgets.panel, "NO DATA", 220, 17,
+            widgets.panel, "NO DATA", GRID_PAD, 38,
             &lv_font_montserrat_14, COLOR_DIM);
-        lv_obj_set_width(widgets.status, 194);
-        lv_obj_set_style_text_align(widgets.status, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_width(widgets.status, GRID_INNER_W);
+        lv_label_set_long_mode(widgets.status, LV_LABEL_LONG_MODE_CLIP);
+        const ProviderWindowLabels labels = provider_window_labels(kProviders[i]);
         build_compact_metric(
-            widgets.panel, "SHORT", 50, 42, 78,
-            widgets.short_window);
+            widgets.panel, labels.short_compact, GRID_PAD, GRID_INNER_W,
+            72, 64, 100, widgets.short_window);
         build_compact_metric(
-            widgets.panel, "WEEK", 108, 100, 136,
-            widgets.week_window);
+            widgets.panel, labels.week_compact, GRID_PAD, GRID_INNER_W,
+            124, 116, 152, widgets.week_window);
     }
 }
 
@@ -935,7 +956,7 @@ void DisplayUi::build_provider_page(lv_obj_t* screen, Provider provider)
         widgets.panel, gesture_event, LV_EVENT_GESTURE, this);
 
     lv_obj_t* title = make_label(
-        widgets.panel, provider == Provider::Codex ? "CODEX" : "CLAUDE",
+        widgets.panel, provider_display_name(provider),
         MARGIN, 11, &lv_font_montserrat_26);
     lv_obj_set_style_text_letter_space(title, 1, 0);
     widgets.status =
@@ -945,10 +966,11 @@ void DisplayUi::build_provider_page(lv_obj_t* screen, Provider provider)
     lv_obj_set_width(widgets.status, SCREEN_W - MARGIN - 260);
     lv_obj_set_style_text_align(widgets.status, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_letter_space(widgets.status, 1, 0);
+    const ProviderWindowLabels labels = provider_window_labels(provider);
     build_large_metric(
-        widgets.panel, "SHORT WINDOW", 49, widgets.short_window);
+        widgets.panel, labels.short_detail, 49, widgets.short_window);
     build_large_metric(
-        widgets.panel, "WEEK WINDOW", 217, widgets.week_window);
+        widgets.panel, labels.week_detail, 217, widgets.week_window);
 }
 
 void DisplayUi::build_navigation(lv_obj_t* screen)
@@ -963,8 +985,8 @@ void DisplayUi::build_navigation(lv_obj_t* screen)
     lv_obj_set_flex_flow(navigation, LV_FLEX_FLOW_ROW);
     lv_obj_remove_flag(navigation, LV_OBJ_FLAG_SCROLLABLE);
 
-    const char* labels[] = {"OVERVIEW", "CODEX", "CLAUDE"};
-    for (size_t i = 0; i < 3; ++i) {
+    const char* labels[kPageCount] = {"ALL", "CODEX", "CLAUDE", "GEMINI", "GROK"};
+    for (size_t i = 0; i < kPageCount; ++i) {
         tab_bindings_[i] =
             TabBinding{this, static_cast<uint8_t>(i)};
         lv_obj_t* tab = lv_button_create(navigation);
@@ -998,7 +1020,7 @@ void DisplayUi::build_navigation(lv_obj_t* screen)
 
     // Selection is shown by an underline, never by a filled block: the
     // navigation must not outshine the data above it. One underline is shared
-    // by all three tabs so a page change can slide it instead of blinking it
+    // by all tabs so a page change can slide it instead of blinking it
     // from one tab to the next. It ignores the row layout and is placed by
     // hand; only its translation is animated, which keeps the transform out of
     // the flex pass.
@@ -1322,20 +1344,20 @@ void DisplayUi::build_ota_overlay(lv_obj_t* screen)
 void DisplayUi::show_page(Page page, bool animate)
 {
     lv_obj_add_flag(overview_panel_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(provider_pages_[0].panel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(provider_pages_[1].panel, LV_OBJ_FLAG_HIDDEN);
+    for (ProviderWidgets& widgets : provider_pages_) {
+        lv_obj_add_flag(widgets.panel, LV_OBJ_FLAG_HIDDEN);
+    }
     if (page == Page::Overview) {
         lv_obj_remove_flag(overview_panel_, LV_OBJ_FLAG_HIDDEN);
     } else {
-        const Provider provider =
-            page == Page::Codex ? Provider::Codex : Provider::Claude;
+        const Provider provider = provider_for_page(page);
         lv_obj_remove_flag(
             provider_pages_[provider_index(provider)].panel,
             LV_OBJ_FLAG_HIDDEN);
     }
 
     const size_t selected = static_cast<size_t>(page);
-    for (size_t i = 0; i < 3; ++i) {
+    for (size_t i = 0; i < kPageCount; ++i) {
         lv_obj_set_style_text_color(
             nav_labels_[i],
             lv_color_hex(i == selected ? COLOR_RESET : COLOR_DIM), 0);
@@ -1403,12 +1425,14 @@ void DisplayUi::update_metric(
 
 void DisplayUi::update_screensaver_usage(const ScreensaverUsageView& usage)
 {
-    // Both rows share a horizontal position when either label is visible.
-    const bool any_percent =
-        usage.rows[0].show_percent || usage.rows[1].show_percent;
+    // All rows share a horizontal position when any label is visible.
+    bool any_percent = false;
+    for (const ScreensaverUsageRow& row : usage.rows) {
+        any_percent = any_percent || row.show_percent;
+    }
     const int bar_x = any_percent ? SAVER_BAR_ALERT_X : SAVER_BAR_X;
 
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < static_cast<int>(kProviderCount); ++i) {
         const ScreensaverUsageRow& row = usage.rows[i];
         const ScreensaverUsageWidgets& widgets = screensaver_usage_[i];
         const lv_color_t color =
@@ -1437,15 +1461,22 @@ void DisplayUi::update_provider(
     ProviderWidgets& widgets, const UsageModel& model,
     Provider provider, bool connected, uint64_t now_ms)
 {
-    const auto state = model.display_state(provider, connected);
+    auto state = model.display_state(provider, connected);
     const auto& snapshot = model.snapshot(provider);
+    // A provider with a single window always publishes partial samples; that
+    // is its complete state, not a degraded one.
+    if (state == DisplayState::Partial &&
+        provider_window_labels(provider).week_compact == nullptr &&
+        snapshot.latest_short_present) {
+        state = DisplayState::Online;
+    }
     if (widgets.status != nullptr) {
         if (state == DisplayState::Online && widgets.compact) {
             char countdown[16]{};
             format_countdown(snapshot.short_window.has_reset,
                 snapshot.short_window.reset_at, model.estimated_epoch(provider, now_ms),
                 countdown, sizeof(countdown));
-            lv_label_set_text_fmt(widgets.status, "SHORT RESET %s", countdown);
+            lv_label_set_text_fmt(widgets.status, "RESET %s", countdown);
         } else if (!widgets.compact && state == DisplayState::Online) {
             const uint32_t epoch = model.estimated_epoch(provider, now_ms);
             const uint32_t age = epoch > snapshot.sampled_at
@@ -1669,7 +1700,7 @@ void DisplayUi::render(
     }
     lv_obj_add_flag(screensaver_panel_, LV_OBJ_FLAG_HIDDEN);
     show_page(page, /*animate=*/true);
-    for (Provider provider : {Provider::Codex, Provider::Claude}) {
+    for (Provider provider : kProviders) {
         const size_t index = provider_index(provider);
         update_provider(
             overview_[index], model, provider, connected, now_ms);

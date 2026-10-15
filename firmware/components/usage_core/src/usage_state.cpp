@@ -4,7 +4,26 @@
 
 namespace usage_panel {
 namespace {
-size_t index_of(Provider provider) { return provider == Provider::Codex ? 0 : 1; }
+size_t index_of(Provider provider) { return provider_index(provider); }
+}
+
+const char* provider_display_name(Provider provider)
+{
+    switch (provider) {
+    case Provider::Claude: return "CLAUDE";
+    case Provider::Gemini: return "GEMINI";
+    case Provider::Grok: return "GROK";
+    default: return "CODEX";
+    }
+}
+
+ProviderWindowLabels provider_window_labels(Provider provider)
+{
+    switch (provider) {
+    case Provider::Gemini: return {"PRO", "PRO MODELS", "FLASH", "FLASH MODELS"};
+    case Provider::Grok: return {"CREDITS", "CREDIT USAGE", nullptr, nullptr};
+    default: return {"5H", "5-HOUR WINDOW", "WEEK", "WEEKLY WINDOW"};
+    }
 }
 
 bool UsageModel::apply(const UsageUpdate& update, uint64_t monotonic_ms)

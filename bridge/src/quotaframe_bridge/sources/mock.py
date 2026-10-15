@@ -39,4 +39,18 @@ class MockUsageSource:
                 short=UsageWindow((27 + 5 * cycle) % 101, now + 75 * 60),
                 week=UsageWindow((48 + 2 * cycle) % 101, now + 3 * 24 * 60 * 60),
             ),
+            Provider.GEMINI: ProviderUsage(
+                provider=Provider.GEMINI,
+                state=SourceState.OK,
+                sampled_at=now,
+                short=UsageWindow((8 + 4 * cycle) % 101, now + 9 * 60 * 60),
+                week=UsageWindow((3 + cycle) % 101, now + 9 * 60 * 60),
+            ),
+            # Grok reports a single credit window, so its samples are partial.
+            Provider.GROK: ProviderUsage(
+                provider=Provider.GROK,
+                state=SourceState.PARTIAL,
+                sampled_at=now,
+                short=UsageWindow((61 + 2 * cycle) % 101, now + 6 * 24 * 60 * 60),
+            ),
         }

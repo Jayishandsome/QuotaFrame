@@ -30,8 +30,8 @@ TEST_CASE("unchanged AMOLED render inputs produce the same key", "[panel_render]
     const auto second = make_timed_render_key(model, Page::Overview, false, 1500);
 
     TEST_ASSERT_TRUE(first == second);
-    TEST_ASSERT_EQUAL(int(DisplayState::NoData), int(first.first_state));
-    TEST_ASSERT_EQUAL(int(DisplayState::NoData), int(first.second_state));
+    TEST_ASSERT_EQUAL(int(DisplayState::NoData), int(first.states[0]));
+    TEST_ASSERT_EQUAL(int(DisplayState::NoData), int(first.states[1]));
     TEST_ASSERT_EQUAL_STRING("", first.short_countdown);
     TEST_ASSERT_EQUAL_STRING("", first.week_countdown);
 }
@@ -71,8 +71,8 @@ TEST_CASE("overview hides countdowns for non-online providers", "[panel_render]"
 
     TEST_ASSERT_EQUAL_STRING("", key.overview_countdowns[0]);
     TEST_ASSERT_EQUAL_STRING("", key.overview_countdowns[1]);
-    TEST_ASSERT_EQUAL(int(DisplayState::Partial), int(key.first_state));
-    TEST_ASSERT_EQUAL(int(DisplayState::NoData), int(key.second_state));
+    TEST_ASSERT_EQUAL(int(DisplayState::Partial), int(key.states[0]));
+    TEST_ASSERT_EQUAL(int(DisplayState::NoData), int(key.states[1]));
     TEST_ASSERT_EQUAL_STRING("", key.short_countdown);
     TEST_ASSERT_EQUAL_STRING("", key.week_countdown);
 }
@@ -123,9 +123,9 @@ TEST_CASE("active screensaver tracks both providers from a detail page",
     const auto fresh = make_timed_render_key(model, Page::Codex, true, 180000, presentation);
     const auto stale = make_timed_render_key(model, Page::Codex, true, 181000, presentation);
 
-    TEST_ASSERT_EQUAL(int(DisplayState::NoData), int(fresh.first_state));
-    TEST_ASSERT_EQUAL(int(DisplayState::Partial), int(fresh.second_state));
-    TEST_ASSERT_EQUAL(int(DisplayState::Partial), int(stale.second_state));
+    TEST_ASSERT_EQUAL(int(DisplayState::NoData), int(fresh.states[0]));
+    TEST_ASSERT_EQUAL(int(DisplayState::Partial), int(fresh.states[1]));
+    TEST_ASSERT_EQUAL(int(DisplayState::Partial), int(stale.states[1]));
     TEST_ASSERT_TRUE(fresh == stale);
     TEST_ASSERT_EQUAL_STRING("", fresh.short_countdown);
     TEST_ASSERT_EQUAL_STRING("", fresh.week_countdown);

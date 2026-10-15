@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TypeVar
 
-from quotaframe_bridge.domain.models import Provider, ProviderUsage, SourceState
+from quotaframe_bridge.domain.models import (
+    EXTRA_PROVIDERS_CAPABILITY,
+    Provider,
+    ProviderUsage,
+    SourceState,
+)
 from quotaframe_bridge.protocol.messages import (
     MAX_INVERSE_CLOCK_SKEW_SECONDS,
     Sequence,
@@ -46,10 +51,35 @@ async def _cancel(task: asyncio.Task[None] | None) -> None:
 
 @dataclass(frozen=True, slots=True)
 class UsageSnapshot:
-    """One immutable publication generation for both providers."""
+    """One immutable publication generation for every provider.
+
+    Gemini and Grok are optional so a snapshot can still be built from a
+    collection that predates them; absent values are simply not published.
+    """
 
     codex: ProviderUsage
     claude: ProviderUsage
+    gemini: ProviderUsage | None = None
+    grok: ProviderUsage | None = None
+
+    @classmethod
+    def from_providers(
+        cls, providers: Mapping[Provider, ProviderUsage]
+    ) -> "UsageSnapshot":
+        return cls(
+            codex=providers[Provider.CODEX],
+            claude=providers[Provider.CLAUDE],
+            gemini=providers.get(Provider.GEMINI),
+            grok=providers.get(Provider.GROK),
+        )
+
+    def publishable(self, *, extra_providers: bool) -> tuple[ProviderUsage, ...]:
+        """Return the values to send, limited to what the device accepts."""
+
+        values: tuple[ProviderUsage | None, ...] = (self.codex, self.claude)
+        if extra_providers:
+            values += (self.gemini, self.grok)
+        return tuple(value for value in values if value is not None)
 
 
 class DeviceSession:
@@ -284,7 +314,12 @@ class DeviceSession:
                 self._force_time_sync = True
             snapshot = self._pending or snapshot
             revision = self._offered_revision
-            for usage in (snapshot.codex, snapshot.claude):
+            status = device_status(self.transport)
+            extra_providers = (
+                status is not None
+                and EXTRA_PROVIDERS_CAPABILITY in status.capabilities
+            )
+            for usage in snapshot.publishable(extra_providers=extra_providers):
                 sequence = self._sequence.next()
                 sent_at = int(self._wall_now().timestamp())
                 if sent_at + MAX_INVERSE_CLOCK_SKEW_SECONDS < usage.sampled_at:
@@ -470,10 +505,7 @@ class MultiDeviceBridgeService:
         self.sessions = self.sessions + (session,)
         providers = self.store.providers
         if providers:
-            session.offer(UsageSnapshot(
-                codex=providers[Provider.CODEX],
-                claude=providers[Provider.CLAUDE],
-            ))
+            session.offer(UsageSnapshot.from_providers(providers))
         if self._running:
             self._start_supervisor(session)
 
@@ -580,10 +612,7 @@ class MultiDeviceBridgeService:
         providers = self.store.providers
         if not providers:
             return ()
-        snapshot = UsageSnapshot(
-            codex=providers[Provider.CODEX],
-            claude=providers[Provider.CLAUDE],
-        )
+        snapshot = UsageSnapshot.from_providers(providers)
         return tuple(
             (session, session.offer(snapshot)) for session in self.sessions
         )

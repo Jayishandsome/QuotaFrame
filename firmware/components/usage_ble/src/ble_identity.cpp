@@ -85,6 +85,8 @@ bool make_status_json(
     cJSON* caps = cJSON_AddArrayToObject(root, "caps");
     if (caps) {
         cJSON_AddItemToArray(caps, cJSON_CreateString("usage.v1"));
+        // The usage parser also accepts the gemini and grok providers.
+        cJSON_AddItemToArray(caps, cJSON_CreateString("usage.gemini_grok.v1"));
         cJSON_AddItemToArray(caps, cJSON_CreateString("ota.folder.v1"));
         if (enable_time_sync) cJSON_AddItemToArray(caps, cJSON_CreateString("time.sync.v1"));
         if (enable_screen_toggle) cJSON_AddItemToArray(caps, cJSON_CreateString("screen.toggle.v1"));

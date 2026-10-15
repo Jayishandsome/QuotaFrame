@@ -17,9 +17,10 @@ namespace usage_panel {
  */
 struct TimedRenderKey {
     Page page = Page::Overview;
-    DisplayState first_state = DisplayState::NoData;
-    DisplayState second_state = DisplayState::NoData;
-    char overview_countdowns[2][16]{};  // Codex and Claude short-window labels.
+    // Overview and screensaver: one state per provider in kProviders order.
+    // Detail pages: states[0] is the shown provider and the rest stay NoData.
+    DisplayState states[kProviderCount]{};
+    char overview_countdowns[kProviderCount][16]{};  // Short-window labels.
     char short_countdown[16]{};
     char week_countdown[16]{};
     PanelPresentation presentation{};

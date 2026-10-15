@@ -6,7 +6,42 @@
 namespace usage_panel {
 
 /** Usage providers supported by protocol version 1. */
-enum class Provider : uint8_t { Codex, Claude };
+enum class Provider : uint8_t { Codex, Claude, Gemini, Grok };
+
+/** Number of Provider values; provider-indexed arrays use this length. */
+constexpr size_t kProviderCount = 4;
+
+/** Providers in display order. Index i corresponds to provider_index() == i. */
+constexpr Provider kProviders[kProviderCount] = {
+    Provider::Codex, Provider::Claude, Provider::Gemini, Provider::Grok};
+
+/** Returns the array index of a provider, in kProviders order. */
+constexpr size_t provider_index(Provider provider)
+{
+    return static_cast<size_t>(provider) < kProviderCount
+        ? static_cast<size_t>(provider) : 0;
+}
+
+/** Returns the upper-case display name of a provider. */
+const char* provider_display_name(Provider provider);
+
+/**
+ * Labels for the two usage windows a provider reports.
+ *
+ * The protocol's short/week slots carry different meanings per provider:
+ * Codex and Claude report 5-hour and weekly windows, Gemini reports Pro and
+ * Flash model quotas, and Grok reports one credit window. A null week label
+ * means the provider never reports a second window and the UI hides that slot.
+ */
+struct ProviderWindowLabels {
+    const char* short_compact;
+    const char* short_detail;
+    const char* week_compact;
+    const char* week_detail;
+};
+
+/** Returns the window labels for a provider. */
+ProviderWindowLabels provider_window_labels(Provider provider);
 
 /** Whether a source sample contains both, one, or no usage windows. */
 enum class SourceState : uint8_t { Ok, Partial, Unavailable };
@@ -87,7 +122,7 @@ public:
     uint32_t estimated_epoch(Provider provider, uint64_t now_ms) const;
 
 private:
-    ProviderSnapshot snapshots_[2]{};
+    ProviderSnapshot snapshots_[kProviderCount]{};
 };
 
 /** Returns the fixed display label for a DisplayState. */
