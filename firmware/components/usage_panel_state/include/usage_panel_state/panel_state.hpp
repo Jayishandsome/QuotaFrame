@@ -27,6 +27,8 @@ struct BatteryView {
     bool full = false;
     bool low_on_battery = false;
     uint8_t percent = 0;
+    // No cell is attached and the board runs from USB power.
+    bool usb_only = false;
 
     bool operator==(const BatteryView& other) const;
 };

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 
 #include "bsp/esp-bsp.h"
@@ -63,24 +64,36 @@ constexpr int BAR_H_DETAIL   = 16;
 // panel. Y values are relative to the content panel, which starts at CONTENT_Y.
 constexpr int OV_COLUMN_CX[2] = {132, 348};
 constexpr int OV_CELL         = 6;
-constexpr int OV_RING_D       = 180;
+constexpr int OV_RING_D       = 168;
 constexpr int OV_RING_W       = 18;   // Three cells.
-constexpr int OV_INNER_D      = 126;
+constexpr int OV_INNER_D      = 114;
 constexpr int OV_INNER_W      = 12;   // Two cells.
-constexpr int OV_RING_CY      = 124;
-constexpr int OV_NAME_Y       = OV_RING_CY + OV_RING_D / 2 + 26;
-constexpr int OV_ROW_Y[2]     = {OV_NAME_Y + 40, OV_NAME_Y + 68};
-constexpr int OV_ROW_HALF_W   = 84;   // Stat rows span the ring centre +/- this.
-// Detail: one large pixel ring carrying the provider name, stats below.
+constexpr int OV_RING_CY      = 98;
+constexpr int OV_NAME_Y       = OV_RING_CY + OV_RING_D / 2 + 24;
+constexpr int OV_RESET_Y      = OV_NAME_Y + 36;
+constexpr int OV_RESET_IN_Y   = OV_RESET_Y + 20;
+constexpr int OV_WEEK_Y       = OV_RESET_IN_Y + 28;
+constexpr int OV_WEEK_BAR_Y   = OV_WEEK_Y + 14;
+constexpr int OV_PACE_Y       = OV_WEEK_BAR_Y + 28;
+constexpr int OV_ROW_HALF_W   = 84;   // Rows span the ring centre +/- this.
+constexpr int OV_BAR_PITCH    = 8;
+static_assert(DisplayUi::WEEK_BAR_CELLS * OV_BAR_PITCH <= 2 * OV_ROW_HALF_W);
+// Detail: one large pixel ring, then three label/value/note columns.
 constexpr int DT_CELL         = 8;
-constexpr int DT_RING_D       = 240;
+constexpr int DT_RING_D       = 224;
 constexpr int DT_RING_W       = 24;   // Three cells.
-constexpr int DT_INNER_D      = 176;
+constexpr int DT_INNER_D      = 160;
 constexpr int DT_INNER_W      = 16;   // Two cells.
-constexpr int DT_RING_CY      = 138;
-constexpr int DT_STAT_LABEL_Y = DT_RING_CY + DT_RING_D / 2 + 30;
-constexpr int DT_STAT_VALUE_Y = DT_STAT_LABEL_Y + 22;
-constexpr int DT_STAT_RIGHT_X = 256;
+constexpr int DT_RING_CY      = 124;
+constexpr int DT_LABEL_Y      = DT_RING_CY + DT_RING_D / 2 + 26;
+constexpr int DT_VALUE_Y      = DT_LABEL_Y + 22;
+constexpr int DT_NOTE_Y       = DT_VALUE_Y + 26;
+constexpr int DT_COLUMN_X[3]  = {MARGIN, 176, 328};
+// Usage windows, in seconds; the elapsed share drives the pace readout.
+constexpr uint32_t SHORT_WINDOW_SECONDS = 5 * 3600;
+constexpr uint32_t WEEK_WINDOW_SECONDS  = 7 * 86400;
+// Usage this many points ahead of elapsed time reads as too fast.
+constexpr int PACE_WARN_POINTS = 10;
 // Weekly ring colour: the provider colour mixed toward black (255 = pure).
 constexpr uint8_t INNER_RING_MIX = 150;
 // A stale (disconnected) sample keeps its geometry but loses most of its colour.
@@ -471,6 +484,8 @@ struct PixelRingBand {
     int inner_radius = 0;
     int outer_radius = 0;
     int32_t value = 0;
+    // Percentage of the window already elapsed, drawn as white cells; -1 hides it.
+    int32_t marker = -1;
     uint32_t lit = 0;
     uint32_t track = 0;
 };
@@ -516,8 +531,16 @@ void paint_pixel_rings(const PixelRings& rings)
             if (degrees < 0) degrees += 360.0f;
             const bool lit = band->value > 0 &&
                 degrees < 3.6f * static_cast<float>(band->value);
-            const uint16_t color =
-                lv_color_to_u16(lv_color_hex(lit ? band->lit : band->track));
+            uint32_t hex = lit ? band->lit : band->track;
+            if (band->marker >= 0) {
+                // One cell wide at the band's mid radius, whatever its size.
+                const float half_width = 0.5f * 57.2957795f * rings.cell /
+                    (0.5f * (band->inner_radius + band->outer_radius));
+                float offset = std::fabs(degrees - 3.6f * static_cast<float>(band->marker));
+                if (offset > 180.0f) offset = 360.0f - offset;
+                if (offset <= half_width) hex = 0xFFFFFF;
+            }
+            const uint16_t color = lv_color_to_u16(lv_color_hex(hex));
             const int left = center + dx - rings.cell / 2 + rings.gap / 2;
             const int top = center + dy - rings.cell / 2 + rings.gap / 2;
             for (int y = std::max(top, 0); y < std::min(top + block, rings.size); ++y) {
@@ -545,10 +568,16 @@ lv_obj_t* make_rings(lv_obj_t* parent, int center_x, int center_y, int cell,
     rings.cell = cell;
     rings.gap = cell >= 8 ? 2 : 1;
     rings.size = outer_d + cell;
-    rings.bands[RING_OUTER] = {outer_d / 2 - outer_w, outer_d / 2, 0,
-                               outer_track, outer_track};
-    rings.bands[RING_INNER] = {inner_d / 2 - inner_w, inner_d / 2, 0,
-                               inner_track, inner_track};
+    const auto band = [](int diameter, int width, uint32_t track) {
+        PixelRingBand result;
+        result.outer_radius = diameter / 2;
+        result.inner_radius = result.outer_radius - width;
+        result.lit = track;
+        result.track = track;
+        return result;
+    };
+    rings.bands[RING_OUTER] = band(outer_d, outer_w, outer_track);
+    rings.bands[RING_INNER] = band(inner_d, inner_w, inner_track);
     rings.pixels = static_cast<uint16_t*>(heap_caps_malloc(
         static_cast<size_t>(rings.size) * rings.size * sizeof(uint16_t),
         MALLOC_CAP_SPIRAM));
@@ -566,16 +595,21 @@ lv_obj_t* make_rings(lv_obj_t* parent, int center_x, int center_y, int cell,
     return canvas;
 }
 
-/** Sets one band's percentage and lit colour; repaints only on change. */
-void set_ring_band(lv_obj_t* canvas, int band_index, int32_t value, lv_color_t color)
+/**
+ * Sets one band's percentage, lit colour and elapsed-time marker (-1 hides
+ * it); repaints only on change.
+ */
+void set_ring_band(lv_obj_t* canvas, int band_index, int32_t value,
+                   lv_color_t color, int32_t marker = -1)
 {
     auto* rings = static_cast<PixelRings*>(lv_obj_get_user_data(canvas));
     if (rings == nullptr) return;
     PixelRingBand& band = rings->bands[band_index];
     const uint32_t hex = lv_color_to_u32(color) & 0xFFFFFF;
-    if (band.value == value && band.lit == hex) return;
+    if (band.value == value && band.lit == hex && band.marker == marker) return;
     band.value = value;
     band.lit = hex;
+    band.marker = marker;
     paint_pixel_rings(*rings);
     lv_obj_invalidate(canvas);
 }
@@ -611,6 +645,55 @@ void set_percent_text(lv_obj_t* label, bool present, uint8_t percent)
 {
     if (present) lv_label_set_text_fmt(label, "%u%%", percent);
     else lv_label_set_text(label, "--");
+}
+
+constexpr const char* WEEKDAYS[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+
+/**
+ * Formats when a window resets in panel-local time ("22:59", or "FRI 10:00"
+ * with `with_weekday`). The local time is derived from the header clock plus
+ * the remaining seconds, so it needs no time zone. Writes "--:--" while the
+ * clock is unset or the reset has passed.
+ */
+void format_reset_clock(const ClockView& clock, uint32_t now_epoch,
+                        uint32_t reset_at, bool with_weekday,
+                        char* output, size_t output_size)
+{
+    const char* time = clock.time;
+    if (!clock.available || reset_at <= now_epoch ||
+        time[0] < '0' || time[0] > '2' || time[2] != ':') {
+        snprintf(output, output_size, "--:--");
+        return;
+    }
+    const int now_minutes = ((time[0] - '0') * 10 + (time[1] - '0')) * 60 +
+                            (time[3] - '0') * 10 + (time[4] - '0');
+    const uint32_t total = static_cast<uint32_t>(now_minutes) +
+                           (reset_at - now_epoch + 30) / 60;
+    const unsigned minute_of_day = total % 1440;
+    const unsigned hour = minute_of_day / 60;
+    const unsigned minute = minute_of_day % 60;
+    int weekday = -1;
+    for (int i = 0; i < 7; ++i) {
+        if (std::strncmp(clock.weekday, WEEKDAYS[i], 3) == 0) weekday = i;
+    }
+    if (with_weekday && weekday >= 0) {
+        snprintf(output, output_size, "%s %02u:%02u",
+                 WEEKDAYS[(weekday + total / 1440) % 7], hour, minute);
+    } else {
+        snprintf(output, output_size, "%02u:%02u", hour, minute);
+    }
+}
+
+/** Returns the elapsed share of a window, 0-100, or -1 without a reset time. */
+int32_t elapsed_percent(const UsageWindow& window, uint32_t window_seconds,
+                        uint32_t now_epoch)
+{
+    if (!window.has_reset || now_epoch == 0) return -1;
+    const uint32_t remaining =
+        window.reset_at > now_epoch ? window.reset_at - now_epoch : 0;
+    if (remaining >= window_seconds) return 0;
+    return static_cast<int32_t>(
+        (uint64_t(window_seconds - remaining) * 100) / window_seconds);
 }
 }  // namespace
 
@@ -812,7 +895,7 @@ void DisplayUi::build_header(lv_obj_t* screen)
         &pixel_press_16, COLOR_TEXT);
 
     lv_obj_t* status_group = lv_obj_create(screen);
-    lv_obj_set_pos(status_group, 292, 13);
+    lv_obj_set_pos(status_group, 222, 13);
     lv_obj_set_size(status_group, 110, 28);
     lv_obj_set_style_bg_opa(status_group, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(status_group, 0, 0);
@@ -833,6 +916,13 @@ void DisplayUi::build_header(lv_obj_t* screen)
         status_group, "WAITING", 16, 8,
         &pixel_silk_16, COLOR_RESET);
     lv_obj_set_width(connection_label_, 94);
+
+    // Measured charge, or USB when no cell is attached.
+    battery_label_ = make_label(
+        screen, "--", SCREEN_W - MARGIN - BATTERY_GROUP_W - 62, 21,
+        &pixel_silk_16, COLOR_RESET);
+    lv_obj_set_width(battery_label_, 56);
+    lv_obj_set_style_text_align(battery_label_, LV_TEXT_ALIGN_RIGHT, 0);
 
     battery_group_ = lv_obj_create(screen);
     lv_obj_set_pos(battery_group_, SCREEN_W - MARGIN - BATTERY_GROUP_W, 13);
@@ -1049,6 +1139,7 @@ void DisplayUi::build_overview(lv_obj_t* screen)
         const Provider provider = i == 0 ? Provider::Codex : Provider::Claude;
         const uint32_t accent = provider_color(provider);
         const int cx = OV_COLUMN_CX[i];
+        const int left = cx - OV_ROW_HALF_W;
         ProviderWidgets& widgets = overview_[i];
         widgets.panel = overview_panel_;
         widgets.compact = true;
@@ -1058,10 +1149,10 @@ void DisplayUi::build_overview(lv_obj_t* screen)
             OV_RING_D, OV_RING_W, COLOR_TRACK,
             OV_INNER_D, OV_INNER_W, COLOR_TRACK_INNER);
         widgets.ring.value = make_centered_label(
-            overview_panel_, "--", cx, OV_RING_CY - 4, OV_INNER_D - 30,
+            overview_panel_, "--", cx, OV_RING_CY - 6, OV_INNER_D - 30,
             &pixel_press_24, COLOR_DIM);
         make_centered_label(
-            overview_panel_, "5H", cx, OV_RING_CY + 24, 60,
+            overview_panel_, "LEFT", cx, OV_RING_CY + 20, 60,
             &pixel_silk_16, COLOR_MUTED);
 
         // Square and name are centred as one group under the ring.
@@ -1079,25 +1170,36 @@ void DisplayUi::build_overview(lv_obj_t* screen)
         make_label(name_row, provider == Provider::Codex ? "CODEX" : "CLAUDE",
                    0, 0, &pixel_press_16, COLOR_TEXT);
 
-        // Two label/value rows: label on the left, value right-aligned.
-        const char* row_labels[2] = {"RESET", "WEEK"};
-        lv_obj_t** row_values[2] = {&widgets.short_reset, &widgets.week_value};
-        for (int row = 0; row < 2; ++row) {
-            const int y = OV_ROW_Y[row];
-            make_label(overview_panel_, row_labels[row], cx - OV_ROW_HALF_W,
+        // Label on the left, value right-aligned across the column.
+        auto row = [&](const char* label, int y) {
+            make_label(overview_panel_, label, left,
                        y - lv_font_get_line_height(&pixel_silk_16) / 2,
                        &pixel_silk_16, COLOR_DIM);
             lv_obj_t* value = make_label(
-                overview_panel_, "--", cx - OV_ROW_HALF_W,
+                overview_panel_, "--", left,
                 y - lv_font_get_line_height(&pixel_press_16) / 2,
                 &pixel_press_16, COLOR_DIM);
             lv_obj_set_width(value, 2 * OV_ROW_HALF_W);
             lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
-            *row_values[row] = value;
-        }
-        widgets.status = make_centered_label(
-            overview_panel_, "", cx, OV_ROW_Y[1] + 30, 2 * OV_ROW_HALF_W,
+            return value;
+        };
+        widgets.short_reset = row("RESET", OV_RESET_Y);
+        widgets.short_in = make_label(
+            overview_panel_, "", left,
+            OV_RESET_IN_Y - lv_font_get_line_height(&pixel_silk_16) / 2,
             &pixel_silk_16, COLOR_DIM);
+        lv_obj_set_width(widgets.short_in, 2 * OV_ROW_HALF_W);
+        lv_obj_set_style_text_align(widgets.short_in, LV_TEXT_ALIGN_RIGHT, 0);
+        widgets.week_value = row("WEEK", OV_WEEK_Y);
+        for (int cell = 0; cell < WEEK_BAR_CELLS; ++cell) {
+            widgets.week_cells[cell] = make_dot(
+                overview_panel_, left + cell * OV_BAR_PITCH, OV_WEEK_BAR_Y,
+                OV_BAR_PITCH - 2, COLOR_TRACK);
+        }
+        widgets.pace_value = make_centered_label(
+            overview_panel_, "", cx, OV_PACE_Y, 2 * OV_ROW_HALF_W,
+            &pixel_silk_16, COLOR_DIM);
+        widgets.status = widgets.pace_value;
     }
 }
 
@@ -1124,32 +1226,29 @@ void DisplayUi::build_provider_page(lv_obj_t* screen, Provider provider)
         DT_INNER_D, DT_INNER_W, COLOR_TRACK_INNER);
     make_centered_label(
         widgets.panel, provider == Provider::Codex ? "CODEX" : "CLAUDE",
-        cx, DT_RING_CY - 44, DT_INNER_D - 50, &pixel_silk_16, accent);
+        cx, DT_RING_CY - 40, DT_INNER_D - 50, &pixel_silk_16, accent);
     widgets.ring.value = make_centered_label(
-        widgets.panel, "--", cx, DT_RING_CY, DT_INNER_D - 40,
+        widgets.panel, "--", cx, DT_RING_CY + 2, DT_INNER_D - 40,
         &pixel_press_40, COLOR_DIM);
-    // Weekly percentage while online; the link or data state otherwise.
-    widgets.week_caption = make_centered_label(
-        widgets.panel, "WEEK --", cx, DT_RING_CY + 42, DT_INNER_D - 50,
+    make_centered_label(
+        widgets.panel, "5H LEFT", cx, DT_RING_CY + 38, DT_INNER_D - 50,
         &pixel_silk_16, COLOR_MUTED);
 
-    widgets.short_legend = make_dot(
-        widgets.panel, MARGIN, DT_STAT_LABEL_Y + 1, 10, accent);
-    make_label(widgets.panel, "5H RESET", MARGIN + 18, DT_STAT_LABEL_Y,
-               &pixel_silk_16, COLOR_MUTED);
-    widgets.short_reset = make_label(
-        widgets.panel, "--", MARGIN, DT_STAT_VALUE_Y,
-        &pixel_press_24, COLOR_DIM);
-
-    widgets.week_legend = make_dot(
-        widgets.panel, DT_STAT_RIGHT_X, DT_STAT_LABEL_Y + 1, 10, accent);
-    lv_obj_set_style_bg_color(
-        widgets.week_legend, mix_with_black(accent, INNER_RING_MIX), 0);
-    make_label(widgets.panel, "WEEK RESET", DT_STAT_RIGHT_X + 18,
-               DT_STAT_LABEL_Y, &pixel_silk_16, COLOR_MUTED);
-    widgets.week_value = make_label(
-        widgets.panel, "--", DT_STAT_RIGHT_X, DT_STAT_VALUE_Y,
-        &pixel_press_24, COLOR_DIM);
+    // Three columns: label, value, note.
+    const char* labels[3] = {"5H RESET", "WEEK", "PACE"};
+    lv_obj_t** values[3] = {&widgets.short_reset, &widgets.week_value,
+                            &widgets.pace_value};
+    lv_obj_t** notes[3] = {&widgets.short_in, &widgets.week_reset,
+                           &widgets.status};
+    for (int column = 0; column < 3; ++column) {
+        const int x = DT_COLUMN_X[column];
+        make_label(widgets.panel, labels[column], x, DT_LABEL_Y,
+                   &pixel_silk_16, COLOR_MUTED);
+        *values[column] = make_label(widgets.panel, "--", x, DT_VALUE_Y,
+                                     &pixel_press_16, COLOR_DIM);
+        *notes[column] = make_label(widgets.panel, "", x, DT_NOTE_Y,
+                                    &pixel_silk_16, COLOR_DIM);
+    }
 }
 
 void DisplayUi::build_navigation(lv_obj_t* screen)
@@ -1606,7 +1705,8 @@ void DisplayUi::update_screensaver_usage(const ScreensaverUsageView& usage)
 
 void DisplayUi::update_provider(
     ProviderWidgets& widgets, const UsageModel& model,
-    Provider provider, bool connected, uint64_t now_ms)
+    Provider provider, bool connected, uint64_t now_ms,
+    const ClockView& clock)
 {
     const auto state = model.display_state(provider, connected);
     const auto& snapshot = model.snapshot(provider);
@@ -1621,77 +1721,117 @@ void DisplayUi::update_provider(
     const uint32_t accent = provider_color(provider);
     const uint8_t short_pct = snapshot.short_window.used_percent;
     const uint8_t week_pct = snapshot.week_window.used_percent;
+    const int32_t short_elapsed = short_present
+        ? elapsed_percent(snapshot.short_window, SHORT_WINDOW_SECONDS, epoch) : -1;
+    const lv_color_t text = lv_color_hex(fresh ? COLOR_TEXT : COLOR_DIM);
 
     // Rings: severity tiers override the provider colour; a stale sample
-    // keeps its arcs but fades them so it cannot pass for live data.
+    // keeps its cells but fades them so it cannot pass for live data. The
+    // white marker shows how much of the 5-hour window has elapsed.
     const uint8_t stale_mix = fresh ? uint8_t{LV_OPA_COVER} : STALE_RING_MIX;
     set_ring_band(
         widgets.ring.rings, RING_OUTER, short_present ? short_pct : 0,
-        mix_with_black(ring_color_hex(short_pct, accent), stale_mix));
+        mix_with_black(ring_color_hex(short_pct, accent), stale_mix),
+        fresh ? short_elapsed : -1);
     set_ring_band(
         widgets.ring.rings, RING_INNER, week_present ? week_pct : 0,
         mix_with_black(ring_color_hex(week_pct, accent),
                        fresh ? INNER_RING_MIX : STALE_RING_MIX / 2));
 
-    set_percent_text(widgets.ring.value, short_present, short_pct);
+    // The centre shows what is left of the 5-hour window.
+    set_percent_text(widgets.ring.value, short_present, 100 - short_pct);
     lv_obj_set_style_text_color(
         widgets.ring.value,
-        lv_color_hex(short_present && fresh ? COLOR_TEXT : COLOR_DIM), 0);
+        lv_color_hex(!short_present || !fresh ? COLOR_DIM
+                     : ring_color_hex(short_pct, COLOR_TEXT)), 0);
     if (widgets.name_dot != nullptr) {
         lv_obj_set_style_bg_color(
             widgets.name_dot, lv_color_hex(fresh ? accent : COLOR_DIM), 0);
     }
 
-    char countdown[16]{};
+    char text_buffer[24]{};
     if (short_present) {
+        format_reset_clock(clock, epoch, snapshot.short_window.reset_at, false,
+                           text_buffer, sizeof(text_buffer));
+        lv_label_set_text(widgets.short_reset, text_buffer);
+        char countdown[16]{};
         format_countdown(snapshot.short_window.has_reset,
             snapshot.short_window.reset_at, epoch, countdown, sizeof(countdown));
-        lv_label_set_text(widgets.short_reset, countdown);
+        lv_label_set_text_fmt(widgets.short_in, "in %s", countdown);
     } else {
         lv_label_set_text(widgets.short_reset, "--");
+        lv_label_set_text(widgets.short_in, "");
     }
+    lv_obj_set_style_text_color(widgets.short_reset, short_present ? text
+                                : lv_color_hex(COLOR_DIM), 0);
+
+    set_percent_text(widgets.week_value, week_present, week_pct);
     lv_obj_set_style_text_color(
-        widgets.short_reset,
-        lv_color_hex(short_present && fresh ? COLOR_TEXT : COLOR_DIM), 0);
+        widgets.week_value,
+        lv_color_hex(!week_present || !fresh ? COLOR_DIM : usage_color_hex(week_pct)), 0);
+
+    // Pace: 5-hour usage compared with the elapsed share of the window.
+    const bool pace_known = fresh && short_present && short_elapsed >= 0;
+    const int32_t pace = pace_known ? int32_t{short_pct} - short_elapsed : 0;
+    const bool too_fast = pace_known && pace > PACE_WARN_POINTS;
+    const lv_color_t pace_color = lv_color_hex(
+        !pace_known ? COLOR_DIM : too_fast ? COLOR_WARN : COLOR_GOOD);
 
     if (widgets.compact) {
-        set_percent_text(widgets.week_value, week_present, week_pct);
-        lv_obj_set_style_text_color(
-            widgets.week_value,
-            lv_color_hex(!week_present || !fresh ? COLOR_DIM
-                         : usage_color_hex(week_pct)), 0);
-        lv_label_set_text(
-            widgets.status,
-            state == DisplayState::Online ? "" : display_state_name(state));
-        lv_obj_set_style_text_color(widgets.status, state_color(state), 0);
+        for (int cell = 0; cell < WEEK_BAR_CELLS; ++cell) {
+            const bool lit = week_present &&
+                cell < (int(week_pct) * WEEK_BAR_CELLS + 50) / 100;
+            lv_obj_set_style_bg_color(
+                widgets.week_cells[cell],
+                lit ? mix_with_black(ring_color_hex(week_pct, accent),
+                                     fresh ? uint8_t{LV_OPA_COVER} : STALE_RING_MIX)
+                    : lv_color_hex(COLOR_TRACK), 0);
+        }
+        if (state != DisplayState::Online) {
+            lv_label_set_text(widgets.pace_value, display_state_name(state));
+            lv_obj_set_style_text_color(widgets.pace_value, state_color(state), 0);
+        } else if (!pace_known) {
+            lv_label_set_text(widgets.pace_value, "");
+        } else if (too_fast) {
+            lv_label_set_text_fmt(widgets.pace_value, "FAST +%ld%%",
+                                  static_cast<long>(pace));
+            lv_obj_set_style_text_color(widgets.pace_value, pace_color, 0);
+        } else {
+            lv_label_set_text(widgets.pace_value, "ON PACE");
+            lv_obj_set_style_text_color(widgets.pace_value, pace_color, 0);
+        }
         return;
     }
 
     if (week_present) {
-        format_countdown(snapshot.week_window.has_reset,
-            snapshot.week_window.reset_at, epoch, countdown, sizeof(countdown));
-        lv_label_set_text(widgets.week_value, countdown);
+        format_reset_clock(clock, epoch, snapshot.week_window.reset_at, true,
+                           text_buffer, sizeof(text_buffer));
+        lv_label_set_text(widgets.week_reset, text_buffer);
     } else {
-        lv_label_set_text(widgets.week_value, "--");
+        lv_label_set_text(widgets.week_reset, "");
     }
-    lv_obj_set_style_text_color(
-        widgets.week_value,
-        lv_color_hex(week_present && fresh ? COLOR_TEXT : COLOR_DIM), 0);
-    lv_obj_set_style_bg_color(
-        widgets.short_legend,
-        mix_with_black(ring_color_hex(short_pct, accent),
-                       fresh ? uint8_t{LV_OPA_COVER} : STALE_RING_MIX), 0);
-    lv_obj_set_style_bg_color(
-        widgets.week_legend,
-        mix_with_black(ring_color_hex(week_pct, accent),
-                       fresh ? INNER_RING_MIX : STALE_RING_MIX / 2), 0);
-
-    if (state == DisplayState::Online && week_present) {
-        lv_label_set_text_fmt(widgets.week_caption, "WEEK %u%%", week_pct);
-    } else if (state == DisplayState::Online) {
-        lv_label_set_text(widgets.week_caption, "WEEK --");
+    if (!pace_known) {
+        lv_label_set_text(widgets.pace_value, "--");
+    } else if (pace > 0) {
+        lv_label_set_text_fmt(widgets.pace_value, "+%ld%%", static_cast<long>(pace));
     } else {
-        lv_label_set_text(widgets.week_caption, display_state_name(state));
+        lv_label_set_text(widgets.pace_value, "OK");
+    }
+    lv_obj_set_style_text_color(widgets.pace_value, pace_color, 0);
+
+    if (state == DisplayState::Online) {
+        const uint32_t age = epoch > snapshot.sampled_at ? epoch - snapshot.sampled_at : 0;
+        if (age < 60) {
+            lv_label_set_text_fmt(widgets.status, "%lus ago",
+                static_cast<unsigned long>(age));
+        } else {
+            lv_label_set_text_fmt(widgets.status, "%lum ago",
+                static_cast<unsigned long>(age / 60));
+        }
+        lv_obj_set_style_text_color(widgets.status, lv_color_hex(COLOR_DIM), 0);
+    } else {
+        lv_label_set_text(widgets.status, display_state_name(state));
+        lv_obj_set_style_text_color(widgets.status, state_color(state), 0);
     }
 }
 
@@ -1830,8 +1970,16 @@ void DisplayUi::render(
     const uint32_t battery_color =
         presentation.battery.low_on_battery ? COLOR_WARN : COLOR_RESET;
     lv_obj_set_style_opa(
-        charge_symbol_, presentation.battery.charging
+        charge_symbol_, presentation.battery.charging || presentation.battery.usb_only
             ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    if (battery_available) {
+        lv_label_set_text_fmt(battery_label_, "%u%%", presentation.battery.percent);
+    } else {
+        lv_label_set_text(battery_label_, presentation.battery.usb_only ? "USB" : "--");
+    }
+    lv_obj_set_style_text_color(
+        battery_label_, lv_color_hex(battery_available || presentation.battery.usb_only
+                                     ? battery_color : COLOR_DIM), 0);
     for (int i = 0; i < 4; ++i) {
         lv_obj_set_style_bg_color(
             battery_segments_[i],
@@ -1897,9 +2045,11 @@ void DisplayUi::render(
     for (Provider provider : {Provider::Codex, Provider::Claude}) {
         const size_t index = provider_index(provider);
         update_provider(
-            overview_[index], model, provider, connected, now_ms);
+            overview_[index], model, provider, connected, now_ms,
+            presentation.clock);
         update_provider(
-            provider_pages_[index], model, provider, connected, now_ms);
+            provider_pages_[index], model, provider, connected, now_ms,
+            presentation.clock);
     }
 
     if (has_passkey) {

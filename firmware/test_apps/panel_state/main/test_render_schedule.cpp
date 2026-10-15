@@ -143,8 +143,12 @@ TEST_CASE("render key tracks only visible battery and presentation changes", "[p
     PanelPresentation same_band = first_presentation;
     same_band.battery.percent = 49;
 
+    // The header prints the battery percentage, so a change inside one band
+    // still needs a redraw.
     const auto first = make_timed_render_key(model, Page::Overview, false, 0, first_presentation);
-    const auto unchanged = make_timed_render_key(model, Page::Overview, false, 0, same_band);
+    const auto new_percent = make_timed_render_key(model, Page::Overview, false, 0, same_band);
+    TEST_ASSERT_TRUE(first != new_percent);
+    const auto unchanged = make_timed_render_key(model, Page::Overview, false, 0, first_presentation);
     TEST_ASSERT_TRUE(first == unchanged);
 
     same_band.clock.available = true;

@@ -10,6 +10,9 @@ namespace usage_panel::amoled {
 namespace {
 
 constexpr int kI2cTimeoutMs = 1000;
+// A connected Li-ion cell never reads below this; a lower ADC value means the
+// presence bit is stale and no cell is attached.
+constexpr uint16_t kMinBatteryMillivolts = 2500;
 // XPowersLib accepts plain function pointers rather than a per-instance context.
 // Keep one registered device/owner so its callbacks cannot accidentally talk to
 // a different I2C handle if another PowerMonitor object is constructed later.
@@ -78,6 +81,11 @@ bool PowerMonitor::begin(i2c_master_bus_handle_t bus)
     // power-off stays with the PMU.
     g_pmu.clearIrqStatus();
     g_pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ);
+    // The battery-present status bit and the fuel gauge only track the cell
+    // while detection and the battery ADC channel are enabled; otherwise a
+    // USB-only board can report a present battery at 100%.
+    g_pmu.enableBattDetection();
+    g_pmu.enableBattVoltageMeasure();
     begun_ = true;
     return true;
 }
@@ -94,13 +102,23 @@ bool PowerMonitor::take_power_key_short_press()
 bool PowerMonitor::read(RawPowerSample& out)
 {
     if (!begun_ || g_owner != this) return false;
+    const bool vbus_present = g_pmu.isVbusIn() && g_pmu.isVbusGood();
+    const bool battery_present = g_pmu.isBatteryConnect() &&
+        g_pmu.getBattVoltage() >= kMinBatteryMillivolts;
+    if (!battery_present) {
+        // A valid sample without a cell lets the panel show USB power instead
+        // of an empty or stale battery gauge.
+        out = {.valid = true, .battery_present = false,
+               .vbus_present = vbus_present};
+        return true;
+    }
     const int percent = g_pmu.getBatteryPercent();
     if (percent < 0 || percent > 100) return false;
 
     out = {
         .valid = true,
-        .battery_present = g_pmu.isBatteryConnect(),
-        .vbus_present = g_pmu.isVbusIn() && g_pmu.isVbusGood(),
+        .battery_present = true,
+        .vbus_present = vbus_present,
         .charging = g_pmu.isCharging(),
         .charge_done =
             g_pmu.getChargerStatus() == XPOWERS_AXP2101_CHG_DONE_STATE,

@@ -45,7 +45,8 @@ bool BatteryView::operator==(const BatteryView& other) const
 {
     return available == other.available && band == other.band &&
            charging == other.charging && full == other.full &&
-           low_on_battery == other.low_on_battery;
+           low_on_battery == other.low_on_battery &&
+           percent == other.percent && usb_only == other.usb_only;
 }
 
 ClockView format_clock_view(const LocalCalendarTime* calendar)
@@ -106,7 +107,9 @@ BatteryView PowerStateFilter::update(
         band_ = BatteryBand::Unavailable;
         has_candidate_ = false;
         stable_full_ = false;
-        return {};
+        BatteryView view{};
+        view.usb_only = sample.vbus_present;
+        return view;
     }
 
     const bool target_full = sample.vbus_present && sample.charge_done;

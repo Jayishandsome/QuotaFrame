@@ -90,26 +90,27 @@ public:
         lv_obj_t* value = nullptr;
     };
 
+    /** Cells in the overview's weekly usage bar. */
+    static constexpr int WEEK_BAR_CELLS = 21;
+
     /**
-     * Widgets for one provider. The overview card (compact) and the detail
+     * Widgets for one provider. The overview column (compact) and the detail
      * page share this shape; members a layout does not use stay null.
      */
     struct ProviderWidgets {
         bool compact = false;
         lv_obj_t* panel = nullptr;
-        // Overview only: state text below the stats, empty while online.
+        // Overview: link/data state under the pace line, empty while online.
+        // Detail: sample age, or the link/data state when not online.
         lv_obj_t* status = nullptr;
         lv_obj_t* name_dot = nullptr;
         RingWidgets ring;
-        lv_obj_t* short_reset = nullptr;
-        // Overview: weekly percentage. Detail: weekly reset countdown.
-        lv_obj_t* week_value = nullptr;
-        // Detail only: weekly percentage (or link/data state) under the
-        // centred value, and the legend dots that tie each reset countdown
-        // to its ring.
-        lv_obj_t* week_caption = nullptr;
-        lv_obj_t* short_legend = nullptr;
-        lv_obj_t* week_legend = nullptr;
+        lv_obj_t* short_reset = nullptr;     // Local clock time of the 5-hour reset.
+        lv_obj_t* short_in = nullptr;        // Countdown to the 5-hour reset.
+        lv_obj_t* week_value = nullptr;      // Weekly percentage used.
+        lv_obj_t* week_reset = nullptr;      // Detail: weekday and time of the weekly reset.
+        lv_obj_t* pace_value = nullptr;      // 5-hour usage ahead of elapsed time, or OK.
+        lv_obj_t* week_cells[WEEK_BAR_CELLS]{};  // Overview: weekly usage bar.
     };
 
     struct TabBinding {
@@ -138,7 +139,8 @@ private:
     void build_ota_overlay(lv_obj_t* screen);
     void show_page(Page page, bool animate);
     void update_provider(ProviderWidgets& widgets, const UsageModel& model,
-                         Provider provider, bool connected, uint64_t now_ms);
+                         Provider provider, bool connected, uint64_t now_ms,
+                         const ClockView& clock);
     void update_screensaver_usage(const ScreensaverUsageView& usage);
 
     bool set_transition_brightness(int32_t percent);
@@ -184,6 +186,7 @@ private:
     lv_obj_t* clock_label_ = nullptr;
     lv_obj_t* battery_group_ = nullptr;
     lv_obj_t* charge_symbol_ = nullptr;
+    lv_obj_t* battery_label_ = nullptr;
     lv_obj_t* battery_segments_[4]{};
     lv_obj_t* overview_panel_ = nullptr;
     ProviderWidgets overview_[2]{};
