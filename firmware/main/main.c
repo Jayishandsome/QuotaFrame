@@ -45,10 +45,23 @@ typedef enum { TONE_START, TONE_DONE, TONE_ERROR } tone_t;
 static esp_websocket_client_handle_t ws;
 static esp_codec_dev_handle_t mic, speaker;
 static atomic_int phase = PHASE_IDLE;
+static _Atomic int64_t phase_since;  // esp_timer time of the last phase change
 static atomic_bool connected, network_started, mic_diagnostic, tone_diagnostic;
 static QueueHandle_t actions, tones;
 static SemaphoreHandle_t ui_mutex;
 static char ssid[33], password[65], uri[256], token[129], headers[180], ca_pem[CA_MAX + 1];
+
+static void set_phase(phase_t p)
+{
+    atomic_store(&phase, p);
+    atomic_store(&phase_since, esp_timer_get_time());
+}
+
+static phase_t swap_phase(phase_t p)
+{
+    atomic_store(&phase_since, esp_timer_get_time());
+    return (phase_t)atomic_exchange(&phase, p);
+}
 
 /* ------------------------------------------------------------ UI port -- */
 
@@ -77,7 +90,7 @@ static bool send_json(const char *data)
 
 static void go_idle_screen_if_busy(void)
 {
-    if (atomic_exchange(&phase, PHASE_IDLE) != PHASE_IDLE) ui_show(UI_SCREEN_IDLE);
+    if (swap_phase(PHASE_IDLE) != PHASE_IDLE) ui_show(UI_SCREEN_IDLE);
 }
 
 static void apply_history(cJSON *json)
@@ -111,27 +124,28 @@ static void received(const char *data, size_t len)
     if (!strcmp(t, "state")) {
         if (!strcmp(v, "listening")) {
             int expected = PHASE_WAIT_LISTEN;
-            atomic_compare_exchange_strong(&phase, &expected, PHASE_LISTENING);
+            if (atomic_compare_exchange_strong(&phase, &expected, PHASE_LISTENING))
+                atomic_store(&phase_since, esp_timer_get_time());
         } else if (!strcmp(v, "idle")) {
             go_idle_screen_if_busy();
         } else if (!strcmp(v, "transcribing")) {
-            atomic_store(&phase, PHASE_BUSY);
+            set_phase(PHASE_BUSY);
             ui_show(UI_SCREEN_THINK);
         } else if (!strcmp(v, "sending")) {
-            atomic_store(&phase, PHASE_BUSY);
+            set_phase(PHASE_BUSY);
             ui_show(UI_SCREEN_SENDING);
         }
     } else if (!strcmp(t, "confirm") && cJSON_IsString(text)) {
-        atomic_store(&phase, PHASE_BUSY);
+        set_phase(PHASE_BUSY);
         ui_show_confirm(text->valuestring);
     } else if (!strcmp(t, "sent")) {
-        atomic_store(&phase, PHASE_IDLE);
+        set_phase(PHASE_IDLE);
         ui_show_done(cJSON_IsString(text) ? text->valuestring : "");
         play(TONE_DONE);
     } else if (!strcmp(t, "error")) {
         const cJSON *reason = cJSON_GetObjectItem(json, "reason");
         const char *r = cJSON_IsString(reason) ? reason->valuestring : "";
-        atomic_store(&phase, PHASE_IDLE);
+        set_phase(PHASE_IDLE);
         ui_show_error(!strcmp(r, "unclear") ? UI_ERR_UNCLEAR :
                       !strcmp(r, "not_configured") ? UI_ERR_SETUP :
                       !strcmp(r, "stt_unavailable") ? UI_ERR_STT : UI_ERR_SEND);
@@ -158,7 +172,7 @@ static void websocket_event(void *arg, esp_event_base_t base, int32_t id, void *
         used = total = 0;
         if (was) ESP_LOGW(TAG, "Backend disconnected");
         ui_set_link(false);
-        if (atomic_exchange(&phase, PHASE_IDLE) != PHASE_IDLE) {
+        if (swap_phase(PHASE_IDLE) != PHASE_IDLE) {
             ui_show_error(UI_ERR_OFFLINE);
             esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
         }
@@ -191,7 +205,7 @@ static void start_listening(int64_t *since)
         return;
     }
     esp_wifi_set_ps(WIFI_PS_NONE);
-    atomic_store(&phase, PHASE_WAIT_LISTEN);
+    set_phase(PHASE_WAIT_LISTEN);
     ui_show(UI_SCREEN_LISTEN);
     play(TONE_START);
     send_json("{\"type\":\"listen.start\"}");
@@ -200,11 +214,11 @@ static void start_listening(int64_t *since)
 
 static void stop_listening(void)
 {
-    atomic_store(&phase, PHASE_BUSY);
+    set_phase(PHASE_BUSY);
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     ui_show(UI_SCREEN_THINK);
     if (!send_json("{\"type\":\"listen.stop\"}")) {
-        atomic_store(&phase, PHASE_IDLE);
+        set_phase(PHASE_IDLE);
         ui_show_error(UI_ERR_OFFLINE);
     }
 }
@@ -220,7 +234,7 @@ static void handle_action(ui_action_t action, int64_t *since)
     case UI_ACT_CANCEL:
         if (p == PHASE_WAIT_LISTEN || p == PHASE_LISTENING) {
             send_json("{\"type\":\"listen.cancel\"}");
-            atomic_store(&phase, PHASE_IDLE);
+            set_phase(PHASE_IDLE);
             esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
             ui_show(UI_SCREEN_IDLE);
         }
@@ -228,21 +242,21 @@ static void handle_action(ui_action_t action, int64_t *since)
     case UI_ACT_SEND:
     case UI_ACT_RETRY:
         if (send_json(action == UI_ACT_SEND ? "{\"type\":\"confirm.send\"}" : "{\"type\":\"retry\"}")) {
-            atomic_store(&phase, PHASE_BUSY);
+            set_phase(PHASE_BUSY);
             ui_show(UI_SCREEN_SENDING);
         } else {
-            atomic_store(&phase, PHASE_IDLE);
+            set_phase(PHASE_IDLE);
             ui_show_error(UI_ERR_OFFLINE);
         }
         break;
     case UI_ACT_REDO:
-        atomic_store(&phase, PHASE_IDLE);
+        set_phase(PHASE_IDLE);
         send_json("{\"type\":\"confirm.cancel\"}");
         start_listening(since);
         break;
     case UI_ACT_TIMEOUT:
         send_json("{\"type\":\"confirm.cancel\"}");
-        atomic_store(&phase, PHASE_IDLE);
+        set_phase(PHASE_IDLE);
         break;
     }
 }
@@ -281,13 +295,20 @@ static void audio_task(void *arg)
         while (xQueueReceive(actions, &action, 0) == pdTRUE) handle_action((ui_action_t)action, &since);
 
         int p = atomic_load(&phase);
+        int64_t waited = esp_timer_get_time() - atomic_load(&phase_since);
+        if ((p == PHASE_BUSY && waited > 120000000) || (p == PHASE_WAIT_LISTEN && waited > 5000000)) {
+            // The Mac never answered: don't leave the board stuck on a busy screen.
+            set_phase(PHASE_IDLE);
+            ui_show_error(UI_ERR_OFFLINE);
+            continue;
+        }
         if (p == PHASE_WAIT_LISTEN || p == PHASE_LISTENING) {
             ui_set_level((int)fmin(1000.0, sqrt(frame / SAMPLES) * 1000.0 / 2500.0));
             if (esp_timer_get_time() - since >= MAX_RECORD_US) {
                 stop_listening();
             } else if (p == PHASE_LISTENING &&
                        esp_websocket_client_send_bin(ws, (const char *)mono, sizeof(mono), pdMS_TO_TICKS(2000)) < 0) {
-                atomic_store(&phase, PHASE_IDLE);
+                set_phase(PHASE_IDLE);
                 ui_show_error(UI_ERR_OFFLINE);
             }
         }
