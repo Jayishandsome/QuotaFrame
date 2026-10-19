@@ -19,6 +19,7 @@
 #include "usage_ota/session.hpp"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
@@ -34,6 +35,12 @@ constexpr uint64_t ORIENTATION_ERROR_RETRY_MS = 1000;
 constexpr uint64_t CONNECTED_MEMORY_DELAY_MS = 60000;
 constexpr uint64_t CLOCK_ERROR_RETRY_MS = 1000;
 constexpr uint64_t POWER_POLL_PERIOD_MS = 1000;
+constexpr uint64_t BATTERY_SCREEN_OFF_MS =
+    static_cast<uint64_t>(CONFIG_WS_USAGE_PANEL_BATTERY_SCREEN_OFF_SECONDS) * 1000;
+// Main-loop period while the panel is lit, and while it is off: touch, shake
+// and the power key still wake it within one slow period.
+constexpr uint32_t LOOP_PERIOD_MS = 20;
+constexpr uint32_t PANEL_OFF_LOOP_PERIOD_MS = 100;
 // The PWR key is only visible as an AXP2101 interrupt latch, so it needs a poll
 // fast enough to feel like a button rather than the power telemetry cadence.
 constexpr uint64_t POWER_KEY_POLL_PERIOD_MS = 80;
@@ -195,6 +202,21 @@ extern "C" void app_main(void)
         ESP_LOGW(TAG, "AXP2101 telemetry unavailable; battery will be hidden");
     }
 
+#if CONFIG_PM_ENABLE
+    // Scale the CPU between 80 and 240 MHz; drivers hold the frequency up
+    // during transfers. Light sleep stays off so BLE timing and the display
+    // bus are unaffected.
+    const esp_pm_config_t pm_config{
+        .max_freq_mhz = 240,
+        .min_freq_mhz = 80,
+        .light_sleep_enable = false,
+    };
+    const esp_err_t pm_error = esp_pm_configure(&pm_config);
+    if (pm_error != ESP_OK) {
+        ESP_LOGW(TAG, "frequency scaling unavailable: %s", esp_err_to_name(pm_error));
+    }
+#endif
+
     log_memory_checkpoint("before_lvgl", false);
     ESP_ERROR_CHECK(ui.begin(initial_rotation) ? ESP_OK : ESP_FAIL);
     log_memory_checkpoint("after_ui", true);
@@ -243,6 +265,8 @@ extern "C" void app_main(void)
     RawPowerSample raw_sample{};
     uint64_t next_power_poll_ms = 0;
     uint64_t next_power_key_poll_ms = 0;
+    uint64_t screensaver_since_ms = 0;  // 0 while the screensaver is inactive.
+    bool panel_on = true;
     ScreensaverController screensaver(
         static_cast<uint64_t>(settings.clock_timeout_seconds) *
         1000ULL);
@@ -493,6 +517,8 @@ extern "C" void app_main(void)
             now_ms, page, ble_link.has_passkey,
             ota_view.phase != OtaPhase::Idle || show_ota_error || settings_open);
         const ScreensaverView screensaver_view = screensaver.view(now_ms);
+        if (!screensaver_view.active) screensaver_since_ms = 0;
+        else if (screensaver_since_ms == 0) screensaver_since_ms = now_ms;
         const PanelPresentation presentation{
             .clock = format_clock_view(
                 calendar_available ? &calendar : nullptr),
@@ -513,7 +539,20 @@ extern "C" void app_main(void)
         // any OTA overlay is up the panel therefore redraws on the second.
         const bool ota_visible =
             ota_view.phase != OtaPhase::Idle || show_ota_error;
-        if (dirty || render_key_changed || (ota_visible && second_changed)) {
+        // On battery the panel goes dark once the clock has shown for a while;
+        // anything that needs the screen keeps or brings it back.
+        const bool on_battery = raw_sample.valid && raw_sample.battery_present &&
+                                !raw_sample.vbus_present;
+        const bool panel_wanted = !on_battery || BATTERY_SCREEN_OFF_MS == 0 ||
+            screensaver_since_ms == 0 ||
+            now_ms - screensaver_since_ms < BATTERY_SCREEN_OFF_MS ||
+            ble_link.has_passkey || ota_visible || settings_open;
+        if (panel_wanted != panel_on && ui.set_panel_power(panel_wanted)) {
+            panel_on = panel_wanted;
+            if (panel_on) dirty = true;
+        }
+        if (panel_on &&
+            (dirty || render_key_changed || (ota_visible && second_changed))) {
             const OtaSnapshot display_ota = ota_snapshot_for_display(
                 ota_view, shown_failure.error, show_ota_error);
             ui.render(
@@ -532,6 +571,6 @@ extern "C" void app_main(void)
                                static_cast<uint32_t>(ota_view.phase), ota_view.offset);
 #endif
         ble.verify_boot();
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(panel_on ? LOOP_PERIOD_MS : PANEL_OFF_LOOP_PERIOD_MS));
     }
 }

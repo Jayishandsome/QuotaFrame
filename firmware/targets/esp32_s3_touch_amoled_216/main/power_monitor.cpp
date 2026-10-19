@@ -86,6 +86,11 @@ bool PowerMonitor::begin(i2c_master_bus_handle_t bus)
     // USB-only board can report a present battery at 100%.
     g_pmu.enableBattDetection();
     g_pmu.enableBattVoltageMeasure();
+    // Sized for the fitted 1000 mAh cell: 0.5 C charging. The 1 A input limit
+    // leaves headroom for the running board; the PMU's input-voltage loop
+    // still backs off on weaker USB ports.
+    g_pmu.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_500MA);
+    g_pmu.setVbusCurrentLimit(XPOWERS_AXP2101_VBUS_CUR_LIM_1000MA);
     begun_ = true;
     return true;
 }

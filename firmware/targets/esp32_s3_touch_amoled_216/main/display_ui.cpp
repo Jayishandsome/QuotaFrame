@@ -14,6 +14,7 @@
 #include "performance_probe.hpp"
 #include "usage_fonts/usage_fonts.h"
 #include "esp_heap_caps.h"
+#include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
@@ -189,7 +190,8 @@ void rounder_event(lv_event_t* event)
 
 lv_display_t* start_display(
     ScreenRotation initial_rotation, esp_lcd_touch_handle_t* ret_touch,
-    lv_indev_t** ret_input_device, esp_lcd_panel_io_handle_t* ret_panel_io)
+    lv_indev_t** ret_input_device, esp_lcd_panel_io_handle_t* ret_panel_io,
+    esp_lcd_panel_handle_t* ret_panel)
 {
     if (ret_touch != nullptr) {
         *ret_touch = nullptr;
@@ -248,6 +250,7 @@ lv_display_t* start_display(
     display_config.panel = panel;
     display_config.panel_io = panel_io;
     *ret_panel_io = panel_io;
+    *ret_panel = panel;
     display_config.profile.interface = ESP_LV_ADAPTER_PANEL_IF_OTHER;
     display_config.profile.rotation = ESP_LV_ADAPTER_ROTATE_0;
     display_config.profile.hor_res = BSP_LCD_H_RES;
@@ -700,7 +703,7 @@ int32_t elapsed_percent(const UsageWindow& window, uint32_t window_seconds,
 bool DisplayUi::begin(ScreenRotation initial_rotation)
 {
     display_ = start_display(
-        initial_rotation, &touch_, &input_device_, &panel_io_);
+        initial_rotation, &touch_, &input_device_, &panel_io_, &panel_);
     if (display_ == nullptr || input_device_ == nullptr || touch_ == nullptr) {
         ESP_LOGE(TAG, "BSP display initialization failed");
         return false;
@@ -740,6 +743,30 @@ bool DisplayUi::begin(ScreenRotation initial_rotation)
     lv_display_add_event_cb(
         display_, transition_refresh_ready, LV_EVENT_REFR_READY, this);
 
+    return true;
+}
+
+bool DisplayUi::set_panel_power(bool on)
+{
+    DisplayLock lock;
+    if (!lock) return false;
+    if (on == panel_on_) return true;
+    lv_anim_delete(this, transition_brightness);
+    transition_refresh_pending_ = false;
+    if (!on) {
+        set_transition_brightness(0);
+        // Not every panel driver implements display off; zero brightness
+        // already darkens the panel, so the result is only logged.
+        const esp_err_t error = esp_lcd_panel_disp_on_off(panel_, false);
+        if (error != ESP_OK) {
+            ESP_LOGW(TAG, "panel display-off failed: %s", esp_err_to_name(error));
+        }
+    } else {
+        esp_lcd_panel_disp_on_off(panel_, true);
+        lv_obj_invalidate(lv_screen_active());
+        set_transition_brightness(brightness_percent_);
+    }
+    panel_on_ = on;
     return true;
 }
 

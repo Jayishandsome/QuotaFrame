@@ -60,6 +60,12 @@ public:
         return touch_down_.exchange(false, std::memory_order_relaxed);
     }
 
+    /**
+     * Switches the AMOLED on or off. Off sets brightness to zero and sends the
+     * panel's display-off command; on restores both and forces a repaint.
+     */
+    bool set_panel_power(bool on);
+
     /** Applies display and touch transforms together for a new rotation. */
     bool set_rotation(ScreenRotation rotation);
 #if CONFIG_WS_USAGE_PANEL_MEMORY_PROBE
@@ -176,6 +182,8 @@ private:
     std::atomic<bool> input_enabled_{true};
     lv_display_t* display_ = nullptr;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
+    esp_lcd_panel_handle_t panel_ = nullptr;
+    bool panel_on_ = true;  // Serialized by the LVGL lock.
     // Access from render() and LVGL callbacks is serialized by the LVGL lock.
     bool transition_refresh_pending_ = false;
     lv_indev_t* input_device_ = nullptr;

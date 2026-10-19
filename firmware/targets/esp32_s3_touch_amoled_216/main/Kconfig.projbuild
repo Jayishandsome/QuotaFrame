@@ -52,6 +52,15 @@ config WS_USAGE_PANEL_SCREENSAVER_TIMEOUT_SECONDS
         Seconds without touch, wake or connection activity before the clock
         screensaver starts. Pairing and OTA always keep the panel awake.
 
+config WS_USAGE_PANEL_BATTERY_SCREEN_OFF_SECONDS
+    int "Turn the panel off on battery after the clock has shown (seconds)"
+    range 0 3600
+    default 60
+    help
+        While running from the battery without USB power, switch the AMOLED
+        off once the clock screensaver has been visible this long. Touch,
+        shake or the power key wake it. 0 keeps the clock lit.
+
 config WS_USAGE_PANEL_SHAKE_WAKE
     bool "Wake from the screensaver by shaking"
     default y

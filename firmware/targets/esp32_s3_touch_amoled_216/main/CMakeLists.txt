@@ -10,6 +10,7 @@ idf_component_register(
     REQUIRES
         nvs_flash
         esp_hw_support
+        esp_pm
         esp_driver_i2c
         heap
         esp_lvgl_adapter
