@@ -133,7 +133,8 @@ static void received(const char *data, size_t len)
         const char *r = cJSON_IsString(reason) ? reason->valuestring : "";
         atomic_store(&phase, PHASE_IDLE);
         ui_show_error(!strcmp(r, "unclear") ? UI_ERR_UNCLEAR :
-                      !strcmp(r, "not_configured") ? UI_ERR_SETUP : UI_ERR_SEND);
+                      !strcmp(r, "not_configured") ? UI_ERR_SETUP :
+                      !strcmp(r, "stt_unavailable") ? UI_ERR_STT : UI_ERR_SEND);
         play(TONE_ERROR);
     } else if (!strcmp(t, "history")) {
         apply_history(json);

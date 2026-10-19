@@ -762,6 +762,7 @@ static const char *const ERROR_TEXT[][3] = {
     [UI_ERR_UNCLEAR] = {"聽不清楚", "請靠近一點，再講一次。", "再講一次"},
     [UI_ERR_SEND] = {"送不出去", "Grok Bot 沒有回應。請確認 Mac 上的 webhook 設定，或稍後再試。", "再試一次"},
     [UI_ERR_SETUP] = {"還未設定 Grok Bot", "請在 Mac 的 config/backend.env 填入 webhook 網址和金鑰。", "知道了"},
+    [UI_ERR_STT] = {"未能辨識語音", "Mac 的語音辨識未能使用。請查看 Mac 上後端視窗的提示。", "知道了"},
 };
 
 static void show_error(ui_error_t e)

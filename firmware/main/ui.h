@@ -30,6 +30,7 @@ typedef enum {
     UI_ERR_UNCLEAR,  // Speech recognition returned nothing.
     UI_ERR_SEND,     // Grok Bot webhook failed.
     UI_ERR_SETUP,    // Webhook not configured on the Mac.
+    UI_ERR_STT,      // Mac speech recognition unavailable (helper missing, permission).
 } ui_error_t;
 
 typedef enum {

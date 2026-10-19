@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>local.grok-voice-remote.stt</string>
+	<key>CFBundleName</key>
+	<string>butler-stt</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Turns the voice remote's push-to-talk recordings into text on this Mac.</string>
+</dict>
+</plist>

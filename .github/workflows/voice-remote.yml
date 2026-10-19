@@ -32,3 +32,32 @@ jobs:
             firmware/build/bootloader/bootloader.bin
             firmware/build/partition_table/partition-table.bin
           retention-days: 14
+
+  speech-helper:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile with SpeechAnalyzer (macOS 26 SDK)
+        working-directory: stt
+        run: |
+          xcrun --show-sdk-version
+          mkdir -p build
+          swiftc -O -parse-as-library -swift-version 5 -target "$(uname -m)-apple-macos13.0" Sources/main.swift -o build/butler-stt \
+            -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
+          otool -s __TEXT __info_plist build/butler-stt | head -3
+          ./build/butler-stt --list-locales | head -c 2000; echo
+      - name: Compile older-recogniser fallback
+        working-directory: stt
+        run: |
+          swiftc -O -parse-as-library -swift-version 5 -target "$(uname -m)-apple-macos13.0" Sources/main.swift -o build/butler-stt-legacy \
+            -D LEGACY_ONLY -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
+      - name: Recognise a test phrase
+        working-directory: stt
+        continue-on-error: true
+        run: |
+          say -v Sinji -o /tmp/hello.aiff "幫我整理今日嘅電郵" || say -o /tmp/hello.aiff "please tidy my email"
+          afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/hello.aiff /tmp/hello.wav
+          ./build/butler-stt --prepare --locale zh-HK || true
+          ./build/butler-stt --file /tmp/hello.wav --locale zh-HK --engine analyzer || true
+          ./build/butler-stt --file /tmp/hello.wav --locale en-US --engine analyzer || true
