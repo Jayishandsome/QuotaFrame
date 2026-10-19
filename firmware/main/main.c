@@ -5,6 +5,7 @@
  * speech into text, the board shows it for confirmation, and only a confirmed
  * command is handed to Grok Bot by the Mac. Protocol: docs/PROTOCOL.md (v2).
  */
+#include <assert.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
