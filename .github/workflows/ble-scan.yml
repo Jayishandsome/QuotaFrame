@@ -1,0 +1,23 @@
+name: BLE scan tool
+on:
+  push:
+    branches: [ble-scan-tool]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        run: |
+          swiftc -O ble_scan.swift -o ble-scan -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
+          codesign --force --sign - ble-scan
+          ./ble-scan --help >/dev/null 2>&1 || true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ble-scan-tool --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create ble-scan-tool --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "BLE scan tool" --notes "Lists nearby Bluetooth LE devices named QF-* or Claude-* (CoreBluetooth only)." ble-scan
