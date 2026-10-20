@@ -718,8 +718,16 @@ static void network_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static esp_timer_handle_t reconnect_timer;
-static int reconnect_delay_s = 2;
+/*
+ * Wi-Fi supervisor. It does not depend on event delivery: a task checks every
+ * second whether the board has an address, and if not, moves on to the next
+ * saved network after a timeout. Events are only used for logs and the
+ * status dot. After all networks failed in a row it waits longer, since each
+ * attempt scans every channel and costs battery.
+ */
+static esp_netif_t *sta_netif;
+static atomic_bool has_ip;
+
 static void use_network(int index)
 {
     wifi_config_t wifi = {0};
@@ -728,38 +736,69 @@ static void use_network(int index)
     esp_wifi_set_config(WIFI_IF_STA, &wifi);
 }
 
-static void reconnect(void *arg)
+static void start_network_tasks(void)
+{
+    if (!atomic_exchange(&network_started, true)) {
+        xTaskCreate(network_task, "network", 6144, NULL, 4, NULL);
+        xTaskCreate(discovery_task, "discovery", 4096, NULL, 3, NULL);
+    }
+}
+
+static void wifi_task(void *arg)
 {
     (void)arg;
-    use_network(wifi_index);
+    const int attempt_s = 15;
+    int waited = 0, pause = 0, rounds = 0;
+    ESP_LOGI(TAG, "Wi-Fi: %d saved network(s); trying network 1", wifi_count);
     esp_wifi_connect();
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        esp_netif_ip_info_t ip = {0};
+        bool up = esp_netif_get_ip_info(sta_netif, &ip) == ESP_OK && ip.ip.addr != 0;
+        if (up) {
+            if (!atomic_exchange(&has_ip, true)) {
+                ESP_LOGI(TAG, "Wi-Fi connected (saved network %d of %d)", wifi_index + 1, wifi_count);
+                start_network_tasks();
+            }
+            waited = pause = rounds = 0;
+            continue;
+        }
+        if (atomic_exchange(&has_ip, false)) ui_set_link(false);
+        if (pause > 0) {
+            if (--pause == 0) {
+                ESP_LOGI(TAG, "Wi-Fi: trying network %d again", wifi_index + 1);
+                use_network(wifi_index);
+                esp_wifi_connect();
+            }
+            continue;
+        }
+        if (++waited < attempt_s) continue;
+        waited = 0;
+        esp_wifi_disconnect();
+        wifi_index = (wifi_index + 1) % wifi_count;
+        if (wifi_index == 0) {
+            ++rounds;
+            pause = rounds < 3 ? 10 : rounds < 6 ? 60 : 120;  // seconds before the next round
+            ESP_LOGW(TAG, "Wi-Fi: no saved network reachable; next try in %d s", pause);
+            continue;
+        }
+        ESP_LOGI(TAG, "Wi-Fi: trying network %d", wifi_index + 1);
+        use_network(wifi_index);
+        esp_wifi_connect();
+    }
 }
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "Wi-Fi: %d saved network(s)", wifi_count);
-        esp_wifi_connect();
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        // Back off when the home network is out of reach: every attempt scans
-        // all channels, which costs a lot of battery if repeated nonstop.
-        // Try the next saved network; wait longer only after all of them failed.
+    if (base == WIFI_EVENT) ESP_LOGI(TAG, "Wi-Fi event %d", (int)id);
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *info = data;
         ESP_LOGW(TAG, "Wi-Fi network %d of %d not joined (reason %d)", wifi_index + 1, wifi_count,
                  info ? info->reason : -1);
         ui_set_link(false);
-        wifi_index = (wifi_index + 1) % wifi_count;
-        int delay = wifi_index == 0 ? reconnect_delay_s : 1;
-        if (wifi_index == 0) reconnect_delay_s = reconnect_delay_s >= 60 ? 120 : reconnect_delay_s * 2;
-        esp_timer_start_once(reconnect_timer, (uint64_t)delay * 1000000);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        reconnect_delay_s = 2;
-        ESP_LOGI(TAG, "Wi-Fi connected (saved network %d of %d)", wifi_index + 1, wifi_count);
-        if (!atomic_exchange(&network_started, true)) {
-            xTaskCreate(network_task, "network", 6144, NULL, 4, NULL);
-            xTaskCreate(discovery_task, "discovery", 4096, NULL, 3, NULL);
-        }
+        ESP_LOGI(TAG, "Wi-Fi got an address");
     }
 }
 
@@ -815,16 +854,15 @@ void app_main(void)
     ui_show(UI_SCREEN_IDLE);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    sta_netif = esp_netif_create_default_wifi_sta();
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    const esp_timer_create_args_t retry = {.callback = reconnect, .name = "wifi_retry"};
-    ESP_ERROR_CHECK(esp_timer_create(&retry, &reconnect_timer));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     use_network(0);
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+    xTaskCreate(wifi_task, "wifi_supervisor", 3072, NULL, 3, NULL);
 }
