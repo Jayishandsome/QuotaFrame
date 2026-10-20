@@ -22,6 +22,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_codec_dev.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
@@ -63,6 +64,34 @@ static phase_t swap_phase(phase_t p)
     atomic_store(&phase_since, esp_timer_get_time());
     return (phase_t)atomic_exchange(&phase, p);
 }
+
+/* ----------------------------------------------------- LVGL memory -- */
+
+#if LV_USE_STDLIB_MALLOC == LV_STDLIB_CUSTOM
+/*
+ * All LVGL objects, styles and draw layers live in PSRAM. Internal RAM is kept
+ * for Wi-Fi and for the display driver's DMA copies; when it ran out, panel
+ * transfers failed with ESP_ERR_NO_MEM and the screen was only partly drawn.
+ */
+#define LV_CAPS (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+void lv_mem_init(void) {}
+void lv_mem_deinit(void) {}
+lv_mem_pool_t lv_mem_add_pool(void *mem, size_t bytes) { (void)mem; (void)bytes; return NULL; }
+void lv_mem_remove_pool(lv_mem_pool_t pool) { (void)pool; }
+void *lv_malloc_core(size_t size)
+{
+    void *p = heap_caps_malloc(size, LV_CAPS);
+    return p ? p : heap_caps_malloc(size, MALLOC_CAP_8BIT);
+}
+void *lv_realloc_core(void *p, size_t size)
+{
+    void *r = heap_caps_realloc(p, size, LV_CAPS);
+    return r ? r : heap_caps_realloc(p, size, MALLOC_CAP_8BIT);
+}
+void lv_free_core(void *p) { heap_caps_free(p); }
+void lv_mem_monitor_core(lv_mem_monitor_t *mon) { (void)mon; }
+lv_result_t lv_mem_test_core(void) { return LV_RESULT_OK; }
+#endif
 
 /* ------------------------------------------------------------ UI port -- */
 
@@ -398,6 +427,13 @@ static void battery_task(void *arg)
             bool charging = present && ((s2 >> 5) & 0x07) == 0x01;
             int pct = present ? pmu_read(0xA4) : -1;
             ui_set_battery(pct > 100 ? 100 : pct, charging, vbus);
+        }
+        static int ticks;
+        if (++ticks % 6 == 1) {
+            ESP_LOGI(TAG, "heap: internal %u free, largest DMA block %u, PSRAM %u free",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         }
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
