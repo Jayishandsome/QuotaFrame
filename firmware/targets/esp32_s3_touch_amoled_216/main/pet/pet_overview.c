@@ -47,7 +47,7 @@ static const char *const NAME[2] = {"Codex", "Claude"};
 static const uint32_t ACCENT[2] = {C_CODEX, C_CLAUDE};
 
 typedef struct {
-    lv_obj_t *head, *dot, *name, *figure, *value, *pct, *bar_fill, *reset;
+    lv_obj_t *dot, *name, *figure, *value, *pct, *bar_fill, *reset;
 } card_t;
 
 static orb_t *pet;
@@ -148,19 +148,17 @@ static void build_card(card_t *c, lv_obj_t *parent, int index)
 {
     const int cx = index == 0 ? COL_CX0 : COL_CX1;
 
-    // Dot and name centred together.
-    c->head = plain(parent);
-    lv_obj_set_size(c->head, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(c->head, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(c->head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(c->head, 8, 0);
-    c->dot = plain(c->head);
+    // The name itself is centred on the column, like the number below it;
+    // the dot hangs to its left and does not push the text sideways.
+    c->name = centered(parent, &pet_ui_16, C_MUTED, NAME[index], cx, NAME_Y, COL_W);
+    lv_obj_set_width(c->name, LV_SIZE_CONTENT);
+    lv_obj_align(c->name, LV_ALIGN_TOP_MID, cx - PANEL_W / 2, NAME_Y);
+    c->dot = plain(parent);
     lv_obj_set_size(c->dot, 8, 8);
     lv_obj_set_style_radius(c->dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(c->dot, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(c->dot, lv_color_hex(ACCENT[index]), 0);
-    c->name = text(c->head, &pet_ui_16, C_MUTED, NAME[index]);
-    lv_obj_align(c->head, LV_ALIGN_TOP_MID, cx - PANEL_W / 2, NAME_Y);
+    lv_obj_align_to(c->dot, c->name, LV_ALIGN_OUT_LEFT_MID, -8, 1);
 
     // Big number with a small "%" beside it, centred as one group, so the
     // digits themselves sit in the middle of the column.
