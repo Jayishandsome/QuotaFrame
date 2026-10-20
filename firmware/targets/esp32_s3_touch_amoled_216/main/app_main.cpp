@@ -337,6 +337,9 @@ extern "C" void app_main(void)
             const bool new_prompt = claude_next.prompt &&
                 (!claude.prompt || std::strcmp(claude_next.prompt_id, claude.prompt_id) != 0);
             claude = claude_next;
+            ESP_LOGI(TAG, "Claude state: live=%d total=%lu running=%lu waiting=%lu prompt=%d",
+                     claude.live, (unsigned long)claude.total, (unsigned long)claude.running,
+                     (unsigned long)claude.waiting, claude.prompt);
             if (new_prompt) {
                 ++claude_serial;
                 claude_state.reply = CLAUDE_REPLY_NONE;
