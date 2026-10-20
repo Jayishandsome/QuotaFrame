@@ -3,7 +3,9 @@
 #include <cstdio>
 #include <cstring>
 
+#include "cJSON.h"
 #include "esp_app_desc.h"
+#include "esp_heap_caps.h"
 #include "esp_mac.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -228,8 +230,10 @@ esp_err_t BleService::claude_reply(const char* prompt_id, bool approve)
     if (buddy_ == nullptr || prompt_id == nullptr || prompt_id[0] == '\0') {
         return ESP_ERR_INVALID_STATE;
     }
-    return approve ? esp_desktop_buddy_prompt_approve_once(buddy_, prompt_id)
-                   : esp_desktop_buddy_prompt_deny(buddy_, prompt_id);
+    const esp_err_t err = approve ? esp_desktop_buddy_prompt_approve_once(buddy_, prompt_id)
+                                  : esp_desktop_buddy_prompt_deny(buddy_, prompt_id);
+    if (err == ESP_OK) (approve ? approved_ : denied_).fetch_add(1);
+    return err;
 }
 
 void BleService::verify_boot()
@@ -309,6 +313,25 @@ esp_desktop_buddy_status_reply_t BleService::status()
             status_json_, sizeof(status_json_), enable_screen_toggle_, boot_valid_.load(), enable_screen_page_)) {
         return esp_desktop_buddy_status_err(
             ESP_ERR_INVALID_ARG, "status_invalid");
+    }
+    // The Claude desktop app's Hardware Buddy window shows bat/sys/stats;
+    // the Bridge ignores keys it does not know.
+    if (cJSON* root = cJSON_Parse(status_json_)) {
+        const uint32_t battery = battery_.load();
+        cJSON* bat = cJSON_AddObjectToObject(root, "bat");
+        if (battery & 0x100u) cJSON_AddNumberToObject(bat, "pct", battery & 0xFFu);
+        cJSON_AddBoolToObject(bat, "usb", (battery & 0x200u) != 0);
+        cJSON* sys = cJSON_AddObjectToObject(root, "sys");
+        cJSON_AddNumberToObject(sys, "up", static_cast<double>(esp_timer_get_time() / 1000000));
+        cJSON_AddNumberToObject(sys, "heap", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        cJSON* stats = cJSON_AddObjectToObject(root, "stats");
+        cJSON_AddNumberToObject(stats, "appr", approved_.load());
+        cJSON_AddNumberToObject(stats, "deny", denied_.load());
+        if (!cJSON_PrintPreallocated(root, status_json_, sizeof(status_json_), false)) {
+            cJSON_Delete(root);
+            return esp_desktop_buddy_status_err(ESP_ERR_INVALID_SIZE, "status_too_large");
+        }
+        cJSON_Delete(root);
     }
     esp_desktop_buddy_json_object_view_t view{
         reinterpret_cast<const uint8_t*>(status_json_), strlen(status_json_)};

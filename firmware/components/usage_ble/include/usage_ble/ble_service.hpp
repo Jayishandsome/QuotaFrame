@@ -109,6 +109,11 @@ public:
     void claude_snapshot(ClaudeSnapshot& out);
     /** Answers the pending permission prompt `prompt_id` (approve once or deny). */
     esp_err_t claude_reply(const char* prompt_id, bool approve);
+    /** Battery figures reported in the status reply (Hardware Buddy stats panel). */
+    void set_battery(bool present, uint8_t percent, bool usb)
+    {
+        battery_.store((present ? 0x100u : 0u) | (usb ? 0x200u : 0u) | percent);
+    }
 
 private:
     static esp_desktop_buddy_command_extension_result_t usage_trampoline(
@@ -139,7 +144,9 @@ private:
     char advertising_prefix_[20]{};
     char advertising_name_[32]{};
     std::atomic<bool> claude_changed_{false};
-    bool share_link_ = false;  // keep advertising while linked (Claude alias)
+    bool share_link_ = false;
+    std::atomic<uint32_t> battery_{0};          // bit 8 present, bit 9 USB, low byte percent
+    std::atomic<uint32_t> approved_{0}, denied_{0};  // keep advertising while linked (Claude alias)
     char status_name_[129]{};
     char target_[32]{};
     char status_json_[1024]{};

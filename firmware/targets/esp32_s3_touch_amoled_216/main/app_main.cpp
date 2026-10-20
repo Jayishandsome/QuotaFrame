@@ -497,6 +497,8 @@ extern "C" void app_main(void)
             raw_sample = {};
             if (power_monitor_ready) power_monitor.read(raw_sample);
             battery_view = power_filter.update(raw_sample, now_ms);
+            ble.set_battery(battery_view.available, battery_view.percent,
+                            raw_sample.valid && raw_sample.vbus_present);
             const OtaPowerReading reading =
                 derive_power_reading(battery_view, raw_sample);
             ota_power_source.publish(
