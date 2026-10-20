@@ -219,7 +219,7 @@ class FirmwareConfigurationTests(unittest.TestCase):
             "CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL": "16384",
             "CONFIG_LV_USE_BUILTIN_MALLOC": "y",
             "CONFIG_LV_USE_CLIB_MALLOC": "n",
-            "CONFIG_LV_MEM_SIZE_KILOBYTES": "128",
+            "CONFIG_LV_MEM_SIZE_KILOBYTES": "256",  # two pets
             "CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES": "0",
             "CONFIG_LV_MEM_ADR": "0x0",
             "CONFIG_LV_USE_CLIB_STRING": "y",

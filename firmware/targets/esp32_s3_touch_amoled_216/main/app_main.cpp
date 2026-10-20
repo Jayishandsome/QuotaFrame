@@ -271,8 +271,10 @@ extern "C" void app_main(void)
     uint64_t next_power_poll_ms = 0;
     uint64_t next_power_key_poll_ms = 0;
     uint64_t screensaver_since_ms = 0;  // 0 while the screensaver is inactive.
-    ClaudeSnapshot claude{};
-    ClaudePromptState claude_state{};
+    // Static: the main task stack is small and these hold long strings.
+    static ClaudeSnapshot claude{};
+    static ClaudeSnapshot claude_next{};
+    static ClaudePromptState claude_state{};
     uint32_t claude_serial = 0;
     bool panel_on = true;
     ScreensaverController screensaver(
@@ -317,11 +319,10 @@ extern "C" void app_main(void)
         }
         // Claude desktop app (Hardware Buddy): permission prompts and activity.
         if (ble.take_claude_changed()) {
-            ClaudeSnapshot next{};
-            ble.claude_snapshot(next);
-            const bool new_prompt = next.prompt &&
-                (!claude.prompt || std::strcmp(next.prompt_id, claude.prompt_id) != 0);
-            claude = next;
+            ble.claude_snapshot(claude_next);
+            const bool new_prompt = claude_next.prompt &&
+                (!claude.prompt || std::strcmp(claude_next.prompt_id, claude.prompt_id) != 0);
+            claude = claude_next;
             if (new_prompt) {
                 ++claude_serial;
                 claude_state.reply = CLAUDE_REPLY_NONE;
