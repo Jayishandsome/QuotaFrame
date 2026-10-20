@@ -42,6 +42,10 @@ final class Scanner: NSObject, CBCentralManagerDelegate {
     }
 }
 
+// The main dispatch queue drives CoreBluetooth; dispatchMain() keeps it running.
 let scanner = Scanner()
-RunLoop.main.run(until: Date().addingTimeInterval(16))
-print("Done. Bluetooth devices seen in total: \(scanner.total.count)")
+DispatchQueue.main.asyncAfter(deadline: .now() + 16) {
+    print("Done. Bluetooth devices seen in total: \(scanner.total.count)")
+    exit(0)
+}
+dispatchMain()
