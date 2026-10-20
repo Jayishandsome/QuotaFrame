@@ -22,19 +22,22 @@ LV_FONT_DECLARE(pet_num_44);
 #define C_CLAUDE 0xE8875F
 
 #define PANEL_W 480
-#define ORB_SIZE 180
-#define ORB_Y 2
-#define SAY_Y 186
-#define CARD_Y 222
-#define CARD_W 210
-#define CARD_H 158
-#define CARD_GAP 12
-#define CARD_PAD 16
-#define BAR_W (CARD_W - 2 * CARD_PAD)
+#define ORB_SIZE 240
+#define ORB_Y 8
+#define SAY_Y 250
+#define COL_W 180
+#define COL_CX0 128     // centre of the Codex column
+#define COL_CX1 352     // centre of the Claude column
+#define NAME_Y 300
+#define VALUE_Y 320
+#define BAR_Y 374
+#define BAR_W 132
+#define RESET_Y 386
 
 #define LOW_LEFT 20     // below this the pet worries
 #define GOOD_LEFT 50    // at or above this the quota is "plenty"
 #define FULL_LEFT 85    // every quota at or above this makes the pet happy
+#define WEEK_LOW 15     // weekly quota left below this is worth a word
 #define PACE_FAST 10    // points ahead of elapsed time that count as fast
 #define REACT_MS 2600   // tap reaction
 #define CHEER_MS 5000   // quota came back
@@ -43,7 +46,7 @@ static const char *const NAME[2] = {"Codex", "Claude"};
 static const uint32_t ACCENT[2] = {C_CODEX, C_CLAUDE};
 
 typedef struct {
-    lv_obj_t *card, *dot, *name, *tag, *value, *bar_fill, *week, *reset;
+    lv_obj_t *head, *dot, *name, *value, *bar_fill, *reset;
 } card_t;
 
 static orb_t *pet;
@@ -129,56 +132,54 @@ static void pet_tapped(lv_event_t *e)
     react(ORB_HAPPY, LINES[tap_count++ % 4], REACT_MS);
 }
 
+static lv_obj_t *centered(lv_obj_t *parent, const lv_font_t *font, uint32_t color, const char *str,
+                          int cx, int y, int w)
+{
+    lv_obj_t *l = text(parent, font, color, str);
+    lv_obj_set_width(l, w);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(l, cx - w / 2, y);
+    return l;
+}
+
+/* One quiet column per provider: name, what is left, a hairline bar, reset. */
 static void build_card(card_t *c, lv_obj_t *parent, int index)
 {
-    c->card = plain(parent);
-    lv_obj_set_size(c->card, CARD_W, CARD_H);
-    lv_obj_set_pos(c->card, (PANEL_W - 2 * CARD_W - CARD_GAP) / 2 + index * (CARD_W + CARD_GAP), CARD_Y);
-    lv_obj_set_style_bg_color(c->card, lv_color_hex(C_CARD), 0);
-    lv_obj_set_style_bg_opa(c->card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(c->card, 18, 0);
-    lv_obj_set_style_border_color(c->card, lv_color_hex(C_CARD_LINE), 0);
-    lv_obj_set_style_border_width(c->card, 1, 0);
+    const int cx = index == 0 ? COL_CX0 : COL_CX1;
 
-    c->dot = plain(c->card);
-    lv_obj_set_size(c->dot, 10, 10);
-    lv_obj_set_pos(c->dot, CARD_PAD, 19);
+    // Dot and name centred together.
+    c->head = plain(parent);
+    lv_obj_set_size(c->head, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(c->head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(c->head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(c->head, 8, 0);
+    c->dot = plain(c->head);
+    lv_obj_set_size(c->dot, 8, 8);
     lv_obj_set_style_radius(c->dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(c->dot, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(c->dot, lv_color_hex(ACCENT[index]), 0);
+    c->name = text(c->head, &pet_ui_16, C_MUTED, NAME[index]);
+    lv_obj_align(c->head, LV_ALIGN_TOP_MID, cx - PANEL_W / 2, NAME_Y);
 
-    c->name = text(c->card, &pet_ui_20, C_TEXT, NAME[index]);
-    lv_obj_set_pos(c->name, CARD_PAD + 18, 8);
-    // Top right: what the big number means, or the link state when not live.
-    c->tag = text(c->card, &pet_ui_16, C_MUTED, "5 小時剩餘");
-    lv_obj_align(c->tag, LV_ALIGN_TOP_RIGHT, -CARD_PAD, 12);
+    c->value = centered(parent, &pet_num_44, C_DIM, "--", cx, VALUE_Y, COL_W);
 
-    c->value = text(c->card, &pet_num_44, C_DIM, "--");
-    lv_obj_set_pos(c->value, CARD_PAD - 2, 38);
-
-    lv_obj_t *track = plain(c->card);
-    lv_obj_set_size(track, BAR_W, 8);
-    lv_obj_set_pos(track, CARD_PAD, 94);
-    lv_obj_set_style_radius(track, 4, 0);
+    lv_obj_t *track = plain(parent);
+    lv_obj_set_size(track, BAR_W, 4);
+    lv_obj_set_pos(track, cx - BAR_W / 2, BAR_Y);
+    lv_obj_set_style_radius(track, 2, 0);
     lv_obj_set_style_bg_opa(track, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(track, lv_color_hex(C_TRACK), 0);
     c->bar_fill = plain(track);
-    lv_obj_set_size(c->bar_fill, 0, 8);
-    lv_obj_set_style_radius(c->bar_fill, 4, 0);
+    lv_obj_set_size(c->bar_fill, 0, 4);
+    lv_obj_set_style_radius(c->bar_fill, 2, 0);
     lv_obj_set_style_bg_opa(c->bar_fill, LV_OPA_COVER, 0);
 
-    // Two label/value rows: names on the left, values right-aligned.
-    lv_obj_set_pos(text(c->card, &pet_ui_16, C_MUTED, "重置"), CARD_PAD, 108);
-    c->reset = text(c->card, &pet_ui_16, C_TEXT, "--");
-    lv_obj_align(c->reset, LV_ALIGN_TOP_RIGHT, -CARD_PAD, 108);
-    lv_obj_set_pos(text(c->card, &pet_ui_16, C_MUTED, "本週剩餘"), CARD_PAD, 130);
-    c->week = text(c->card, &pet_ui_16, C_TEXT, "--");
-    lv_obj_align(c->week, LV_ALIGN_TOP_RIGHT, -CARD_PAD, 130);
+    c->reset = centered(parent, &pet_ui_16, C_DIM, "", cx, RESET_Y, COL_W);
 }
 
 void pet_overview_create(lv_obj_t *parent)
 {
-    pet = orb_create(parent, false);
+    pet = orb_create(parent, true);
     lv_obj_t *root = orb_root(pet);
     lv_obj_set_pos(root, (PANEL_W - ORB_SIZE) / 2, ORB_Y);
     lv_obj_add_flag(root, LV_OBJ_FLAG_CLICKABLE);
@@ -191,6 +192,11 @@ void pet_overview_create(lv_obj_t *parent)
     lv_obj_set_pos(say, 20, SAY_Y);
 
     for (int i = 0; i < 2; ++i) build_card(&cards[i], parent, i);
+    lv_obj_t *rule = plain(parent);
+    lv_obj_set_size(rule, 1, RESET_Y + 18 - NAME_Y);
+    lv_obj_set_pos(rule, PANEL_W / 2, NAME_Y + 2);
+    lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(rule, lv_color_hex(0x15181D), 0);
 
     react_timer = lv_timer_create(react_done, REACT_MS, NULL);
     lv_timer_pause(react_timer);
@@ -202,44 +208,34 @@ void pet_overview_create(lv_obj_t *parent)
 static void update_card(card_t *c, const pet_provider_t *p, int index)
 {
     bool fresh = p->state == PET_ONLINE || p->state == PET_PARTIAL;
-    const char *tag = p->state == PET_OFFLINE ? "離線" : p->state == PET_NO_DATA ? "無資料"
-                      : p->state == PET_PARTIAL ? "部分資料" : "5 小時剩餘";
-    lv_label_set_text(c->tag, tag);
-    lv_obj_set_style_text_color(c->tag, lv_color_hex(p->state == PET_PARTIAL ? C_AMBER : C_MUTED), 0);
     lv_obj_set_style_bg_color(c->dot, lv_color_hex(fresh ? ACCENT[index] : C_DIM), 0);
-    lv_obj_set_style_text_color(c->name, lv_color_hex(fresh ? C_TEXT : C_MUTED), 0);
+    lv_obj_set_style_text_color(c->name, lv_color_hex(fresh ? C_MUTED : C_DIM), 0);
 
     if (p->short_present) {
         lv_label_set_text_fmt(c->value, "%u%%", p->short_left);
         uint32_t color = fresh ? level_color(p->short_left) : C_DIM;
         lv_obj_set_style_text_color(c->value, lv_color_hex(fresh && p->short_left >= GOOD_LEFT ? C_TEXT : color), 0);
-        lv_obj_set_width(c->bar_fill, LV_MAX(p->short_left ? 8 : 0, BAR_W * p->short_left / 100));
+        lv_obj_set_width(c->bar_fill, LV_MAX(p->short_left ? 4 : 0, BAR_W * p->short_left / 100));
         lv_obj_set_style_bg_color(c->bar_fill, lv_color_hex(fresh ? color : C_DIM), 0);
-        if (p->countdown[0] && strcmp(p->countdown, "--") != 0) {
-            if (strcmp(p->countdown, "WAIT") == 0) lv_label_set_text(c->reset, "即將");
-            else lv_label_set_text(c->reset, p->countdown);
-        } else {
-            lv_label_set_text(c->reset, "--");
-        }
     } else {
         lv_label_set_text(c->value, "--");
         lv_obj_set_style_text_color(c->value, lv_color_hex(C_DIM), 0);
         lv_obj_set_width(c->bar_fill, 0);
-        lv_label_set_text(c->reset, "--");
     }
-    if (p->week_present) lv_label_set_text_fmt(c->week, "%u%%", 100 - LV_MIN(p->week_used, 100));
-    else lv_label_set_text(c->week, "--");
-    uint32_t week_color = !fresh || !p->week_present ? C_DIM
-                          : p->week_used >= 100 - LOW_LEFT ? C_AMBER : C_TEXT;
-    lv_obj_set_style_text_color(c->week, lv_color_hex(week_color), 0);
-    lv_obj_set_style_text_color(c->reset, lv_color_hex(fresh && p->short_present ? C_TEXT : C_DIM), 0);
+
+    // One line under the bar: the link state when not live, else the reset.
+    if (p->state == PET_OFFLINE) lv_label_set_text(c->reset, "離線");
+    else if (p->state == PET_NO_DATA) lv_label_set_text(c->reset, "無資料");
+    else if (!p->short_present || !p->countdown[0] || !strcmp(p->countdown, "--")) lv_label_set_text(c->reset, "");
+    else if (!strcmp(p->countdown, "WAIT")) lv_label_set_text(c->reset, "即將重置");
+    else lv_label_set_text_fmt(c->reset, "%s 後重置", p->countdown);
 }
 
 /* Picks the pet's mood and line from the quotas it can see. */
 static void judge(const pet_view_t *v, orb_mood_t *mood, char *line, size_t size)
 {
     int known = 0, low = -1, fast = -1, best_pace = PACE_FAST;
-    int min_left = 101, min_index = -1, empty_count = 0;
+    int min_left = 101, min_index = -1, empty_count = 0, week_low = -1;
     for (int i = 0; i < 2; ++i) {
         const pet_provider_t *p = &v->provider[i];
         if (!p->short_present) continue;
@@ -248,11 +244,8 @@ static void judge(const pet_view_t *v, orb_mood_t *mood, char *line, size_t size
         if (p->short_left == 0) ++empty_count;
         if (p->short_left < LOW_LEFT && (low < 0 || p->short_left < v->provider[low].short_left)) low = i;
         if (p->pace_known && p->pace > best_pace) { best_pace = p->pace; fast = i; }
-    }
-    if (known == 0 && v->claude_working) {
-        *mood = ORB_IDLE;
-        snprintf(line, size, "Claude 正在工作中…");
-        return;
+        if (p->week_present && 100 - p->week_used < WEEK_LOW &&
+            (week_low < 0 || p->week_used > v->provider[week_low].week_used)) week_low = i;
     }
     if (known == 0) {
         *mood = ORB_SLEEPY;
@@ -277,12 +270,12 @@ static void judge(const pet_view_t *v, orb_mood_t *mood, char *line, size_t size
     } else if (low >= 0) {
         *mood = ORB_THINK;
         snprintf(line, size, "%s 只剩 %u%%，省著點用", NAME[low], v->provider[low].short_left);
+    } else if (week_low >= 0) {
+        *mood = ORB_THINK;
+        snprintf(line, size, "%s 本週只剩 %u%%", NAME[week_low], 100 - v->provider[week_low].week_used);
     } else if (fast >= 0) {
         *mood = ORB_THINK;
         snprintf(line, size, "%s 用得有點快喔", NAME[fast]);
-    } else if (v->claude_working) {
-        *mood = ORB_IDLE;
-        snprintf(line, size, "Claude 正在工作中…");
     } else if (min_left < GOOD_LEFT) {
         *mood = ORB_IDLE;
         snprintf(line, size, "還夠用，慢慢來");

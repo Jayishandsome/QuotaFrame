@@ -12,8 +12,10 @@
 #include "bsp/touch.h"
 #include "display_transport.hpp"
 #include "performance_probe.hpp"
-#include "pet/claude_prompt.h"
 #include "pet/pet_overview.h"
+
+LV_FONT_DECLARE(pet_ui_16);
+LV_FONT_DECLARE(pet_ui_20);
 #include "usage_fonts/usage_fonts.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
@@ -739,7 +741,6 @@ bool DisplayUi::begin(ScreenRotation initial_rotation)
     build_navigation(screen);
     build_screensaver(screen);
     build_settings(screen);
-    claude_prompt_create(screen);  // under pairing and OTA overlays
     build_pairing_overlay(screen);
     build_ota_overlay(screen);
     show_page(Page::Overview, /*animate=*/false);
@@ -747,15 +748,6 @@ bool DisplayUi::begin(ScreenRotation initial_rotation)
         display_, transition_refresh_ready, LV_EVENT_REFR_READY, this);
 
     return true;
-}
-
-ClaudeDecision DisplayUi::take_claude_decision()
-{
-    switch (claude_prompt_take_action()) {
-    case CLAUDE_ACTION_ALLOW: return ClaudeDecision::Allow;
-    case CLAUDE_ACTION_DENY: return ClaudeDecision::Deny;
-    default: return ClaudeDecision::None;
-    }
 }
 
 bool DisplayUi::set_panel_power(bool on)
@@ -767,10 +759,6 @@ bool DisplayUi::set_panel_power(bool on)
     transition_refresh_pending_ = false;
     if (!on) {
         pet_overview_set_active(false);  // nothing to animate on a dark panel
-        if (claude_prompt_visible()) {
-            claude_prompt_view_t hidden{};
-            claude_prompt_update(&hidden);
-        }
         set_transition_brightness(0);
         // Not every panel driver implements display off; zero brightness
         // already darkens the panel, so the result is only logged.
@@ -935,11 +923,13 @@ void DisplayUi::probe_refresh_event(lv_event_t* event)
 void DisplayUi::build_header(lv_obj_t* screen)
 {
     clock_label_ = make_label(
-        screen, "--:--", MARGIN, 18,
-        &pixel_press_16, COLOR_TEXT);
+        screen, "--:--", SCREEN_W / 2 - 60, 12,
+        &pet_ui_20, COLOR_TEXT);
+    lv_obj_set_width(clock_label_, 120);
+    lv_obj_set_style_text_align(clock_label_, LV_TEXT_ALIGN_CENTER, 0);
 
     lv_obj_t* status_group = lv_obj_create(screen);
-    lv_obj_set_pos(status_group, 222, 13);
+    lv_obj_set_pos(status_group, MARGIN + 4, 13);
     lv_obj_set_size(status_group, 110, 28);
     lv_obj_set_style_bg_opa(status_group, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(status_group, 0, 0);
@@ -949,7 +939,7 @@ void DisplayUi::build_header(lv_obj_t* screen)
     status_dot_ = lv_obj_create(status_group);
     lv_obj_set_pos(status_dot_, 0, 10);
     lv_obj_set_size(status_dot_, 8, 8);
-    lv_obj_set_style_radius(status_dot_, 0, 0);
+    lv_obj_set_style_radius(status_dot_, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(status_dot_, lv_color_hex(COLOR_MUTED), 0);
     lv_obj_set_style_bg_opa(status_dot_, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(status_dot_, 0, 0);
@@ -958,13 +948,14 @@ void DisplayUi::build_header(lv_obj_t* screen)
 
     connection_label_ = make_label(
         status_group, "WAITING", 16, 8,
-        &pixel_silk_16, COLOR_RESET);
+        &pet_ui_16, COLOR_RESET);
     lv_obj_set_width(connection_label_, 94);
+    lv_obj_add_flag(connection_label_, LV_OBJ_FLAG_HIDDEN);  // the dot says it
 
     // Measured charge, or USB when no cell is attached.
     battery_label_ = make_label(
-        screen, "--", SCREEN_W - MARGIN - BATTERY_GROUP_W - 62, 21,
-        &pixel_silk_16, COLOR_RESET);
+        screen, "--", SCREEN_W - MARGIN - BATTERY_GROUP_W - 62, 16,
+        &pet_ui_16, COLOR_MUTED);
     lv_obj_set_width(battery_label_, 56);
     lv_obj_set_style_text_align(battery_label_, LV_TEXT_ALIGN_RIGHT, 0);
 
@@ -1012,6 +1003,7 @@ void DisplayUi::build_header(lv_obj_t* screen)
     lv_obj_remove_flag(terminal, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* divider = lv_obj_create(screen);
+    lv_obj_add_flag(divider, LV_OBJ_FLAG_HIDDEN);  // no rule under the header
     lv_obj_set_pos(divider, MARGIN, HEADER_H);
     lv_obj_set_size(divider, CARD_W, 1);
     lv_obj_set_style_bg_color(divider, lv_color_hex(COLOR_LINE), 0);
@@ -1170,7 +1162,12 @@ void DisplayUi::build_overview(lv_obj_t* screen)
 {
     overview_panel_ = lv_obj_create(screen);
     lv_obj_set_pos(overview_panel_, 0, CONTENT_Y);
-    lv_obj_set_size(overview_panel_, SCREEN_W, CONTENT_H);
+    lv_obj_set_size(overview_panel_, SCREEN_W, SCREEN_H - CONTENT_Y);
+    // The pet's light trails rise a few pixels above the panel while it floats.
+    lv_obj_add_flag(overview_panel_, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_add_event_cb(overview_panel_, [](lv_event_t* e) { lv_event_set_ext_draw_size(e, 40); },
+                        LV_EVENT_REFR_EXT_DRAW_SIZE, nullptr);
+    lv_obj_refresh_ext_draw_size(overview_panel_);
     lv_obj_set_style_bg_opa(overview_panel_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(overview_panel_, 0, 0);
     lv_obj_set_style_pad_all(overview_panel_, 0, 0);
@@ -1276,6 +1273,7 @@ void DisplayUi::build_navigation(lv_obj_t* screen)
     lv_obj_set_style_pad_column(navigation, NAV_GAP, 0);
     lv_obj_set_flex_flow(navigation, LV_FLEX_FLOW_ROW);
     lv_obj_remove_flag(navigation, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(navigation, LV_OBJ_FLAG_HIDDEN);  // single-page pet UI
 
     const char* labels[] = {"ALL", "CODEX", "CLAUDE"};
     for (size_t i = 0; i < 3; ++i) {
@@ -1904,19 +1902,8 @@ void DisplayUi::render(
     }
 
     const bool ota_visible = ota.phase != OtaPhase::Idle || show_ota_error;
-    // A pending Claude permission prompt takes the screen, except while
-    // pairing or updating firmware.
-    const bool claude_visible = claude_.show && !has_passkey && !ota_visible;
-    claude_prompt_view_t claude_view{};
-    claude_view.show = claude_visible;
-    claude_view.tool = claude_.tool;
-    claude_view.hint = claude_.hint;
-    claude_view.waiting = claude_.waiting;
-    claude_view.reply = static_cast<claude_reply_t>(claude_.reply);
-    claude_view.serial = claude_.serial;
-    claude_prompt_update(&claude_view);
-    const bool screensaver_visible = presentation.screensaver.active &&
-        !has_passkey && !ota_visible && !claude_visible;
+    const bool screensaver_visible =
+        presentation.screensaver.active && !has_passkey && !ota_visible;
     const bool was_screensaver_visible =
         !lv_obj_has_flag(screensaver_panel_, LV_OBJ_FLAG_HIDDEN);
     if (screensaver_visible != was_screensaver_visible) {
@@ -1926,8 +1913,7 @@ void DisplayUi::render(
     }
     input_enabled_.store(input_enabled && !has_passkey, std::memory_order_relaxed);
     pet_overview_set_active(
-        panel_on_ && !ota_visible && !screensaver_visible && !claude_visible &&
-        page == Page::Overview &&
+        panel_on_ && !ota_visible && !screensaver_visible &&
         !(settings_visible_.load(std::memory_order_relaxed) && !has_passkey));
     ota_active_.store(ota.phase != OtaPhase::Idle, std::memory_order_relaxed);
     ota_confirming_.store(
@@ -2070,10 +2056,9 @@ void DisplayUi::render(
         return;
     }
     lv_obj_add_flag(screensaver_panel_, LV_OBJ_FLAG_HIDDEN);
-    show_page(page, /*animate=*/true);
+    show_page(Page::Overview, /*animate=*/false);  // single page
     pet_view_t pet_view{};
     pet_view.connected = connected;
-    pet_view.claude_working = claude_.working;
     pet_view.provider[0] = pet_provider_view(model, Provider::Codex, connected, now_ms);
     pet_view.provider[1] = pet_provider_view(model, Provider::Claude, connected, now_ms);
     pet_overview_update(&pet_view);
@@ -2148,6 +2133,8 @@ void DisplayUi::gesture_event(lv_event_t* event)
     if (!swipe.has_value()) {
         return;
     }
+    (void)swipe;  // the pet UI has a single page
+    return;
 
     const Page current =
         ui->requested_page_.load(std::memory_order_relaxed);

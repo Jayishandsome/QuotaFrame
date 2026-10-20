@@ -27,11 +27,10 @@ typedef struct {
 
 typedef struct {
     bool connected;
-    bool claude_working;         // the Claude desktop app is generating
     pet_provider_t provider[2];  // 0 = Codex, 1 = Claude
 } pet_view_t;
 
-/** Builds the page inside `parent` (480 x 385 content area). */
+/** Builds the page inside `parent` (480 x 429 area below the header). */
 void pet_overview_create(lv_obj_t *parent);
 void pet_overview_update(const pet_view_t *view);
 /** Pauses the pet's animations while the page is hidden. */

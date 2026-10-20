@@ -9,7 +9,6 @@ idf_component_register(
         "pet/orb.c"
         "pet/orb_assets.c"
         "pet/pet_overview.c"
-        "pet/claude_prompt.c"
         "pet/fonts/pet_ui_16.c"
         "pet/fonts/pet_ui_20.c"
         "pet/fonts/pet_num_44.c"

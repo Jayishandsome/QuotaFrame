@@ -7,7 +7,7 @@ import re, subprocess, sys
 from pathlib import Path
 from fontTools.ttLib import TTFont
 SRC = Path(sys.argv[1]); FONTS = Path(sys.argv[2]); OUT = SRC / "fonts"
-text = "".join((SRC / f).read_text(encoding="utf-8") for f in ("pet_overview.c", "claude_prompt.c"))
+text = "".join((SRC / f).read_text(encoding="utf-8") for f in ("pet_overview.c",))
 strings = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', text))
 ascii_ = "".join(chr(c) for c in range(0x20, 0x7F))
 ui = strings + ascii_ + "…（）"

@@ -3,9 +3,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "cJSON.h"
 #include "esp_app_desc.h"
-#include "esp_heap_caps.h"
 #include "esp_mac.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -132,15 +130,6 @@ esp_err_t BleService::start(AppEventQueue& queue, const BleServiceConfig& config
             advertising_name_, sizeof(advertising_name_))) {
         return ESP_ERR_INVALID_ARG;
     }
-    share_link_ = config.advertising_alias != nullptr && config.advertising_alias[0] != '\0';
-    if (share_link_) {
-        // The scan response carries only the name: 29 bytes at most.
-        char aliased[sizeof(advertising_name_)]{};
-        const int written = snprintf(aliased, sizeof(aliased), "%s%s",
-                                     config.advertising_alias, advertising_name_);
-        if (written < 0 || written > 29) return ESP_ERR_INVALID_ARG;
-        memcpy(advertising_name_, aliased, sizeof(advertising_name_));
-    }
     if (!ota_folder_sink_.bind(*ota_, target_) || !reset_folder_push()) {
         return ESP_ERR_NO_MEM;
     }
@@ -158,8 +147,6 @@ esp_err_t BleService::start(AppEventQueue& queue, const BleServiceConfig& config
         {"char_end", &BleService::folder_push_trampoline},
     };
     esp_desktop_buddy_config_t buddy_config{};
-    buddy_config.event_sink.on_event = &BleService::buddy_event_trampoline;
-    buddy_config.event_sink.ctx = this;
     buddy_config.handlers.ctx = this;
     buddy_config.handlers.on_status = &BleService::status_trampoline;
     buddy_config.handlers.command_extension.ctx = this;
@@ -190,49 +177,6 @@ esp_err_t BleService::start(AppEventQueue& queue, const BleServiceConfig& config
         esp_desktop_buddy_folder_push_delete(folder_push_);
         folder_push_ = nullptr;
     }
-    return err;
-}
-
-void BleService::buddy_event_trampoline(
-    void* ctx, const esp_desktop_buddy_event_t* event)
-{
-    if (ctx == nullptr || event == nullptr) return;
-    if (event->type == ESP_DESKTOP_BUDDY_EVENT_SNAPSHOT_UPDATED ||
-        event->type == ESP_DESKTOP_BUDDY_EVENT_LIVENESS_CHANGED ||
-        event->type == ESP_DESKTOP_BUDDY_EVENT_PERMISSION_SENT) {
-        static_cast<BleService*>(ctx)->claude_changed_.store(true);
-    }
-}
-
-void BleService::claude_snapshot(ClaudeSnapshot& out)
-{
-    out = ClaudeSnapshot{};
-    if (buddy_ == nullptr) return;
-    esp_desktop_buddy_snapshot_info_t info{};
-    if (esp_desktop_buddy_get_snapshot_info(buddy_, &info) != ESP_OK || !info.has_state) return;
-    out.live = info.live;
-    out.total = info.total;
-    out.running = info.running;
-    out.waiting = info.waiting;
-    if (!info.live || !info.prompt_present) return;
-    size_t required = 0;
-    // Truncated strings are still shown; only the id must be complete.
-    out.prompt = esp_desktop_buddy_get_prompt_id(
-        buddy_, out.prompt_id, sizeof(out.prompt_id), &required) == ESP_OK &&
-        out.prompt_id[0] != '\0';
-    if (!out.prompt) return;
-    esp_desktop_buddy_get_prompt_tool(buddy_, out.tool, sizeof(out.tool), &required);
-    esp_desktop_buddy_get_prompt_hint(buddy_, out.hint, sizeof(out.hint), &required);
-}
-
-esp_err_t BleService::claude_reply(const char* prompt_id, bool approve)
-{
-    if (buddy_ == nullptr || prompt_id == nullptr || prompt_id[0] == '\0') {
-        return ESP_ERR_INVALID_STATE;
-    }
-    const esp_err_t err = approve ? esp_desktop_buddy_prompt_approve_once(buddy_, prompt_id)
-                                  : esp_desktop_buddy_prompt_deny(buddy_, prompt_id);
-    if (err == ESP_OK) (approve ? approved_ : denied_).fetch_add(1);
     return err;
 }
 
@@ -313,25 +257,6 @@ esp_desktop_buddy_status_reply_t BleService::status()
             status_json_, sizeof(status_json_), enable_screen_toggle_, boot_valid_.load(), enable_screen_page_)) {
         return esp_desktop_buddy_status_err(
             ESP_ERR_INVALID_ARG, "status_invalid");
-    }
-    // The Claude desktop app's Hardware Buddy window shows bat/sys/stats;
-    // the Bridge ignores keys it does not know.
-    if (cJSON* root = cJSON_Parse(status_json_)) {
-        const uint32_t battery = battery_.load();
-        cJSON* bat = cJSON_AddObjectToObject(root, "bat");
-        if (battery & 0x100u) cJSON_AddNumberToObject(bat, "pct", battery & 0xFFu);
-        cJSON_AddBoolToObject(bat, "usb", (battery & 0x200u) != 0);
-        cJSON* sys = cJSON_AddObjectToObject(root, "sys");
-        cJSON_AddNumberToObject(sys, "up", static_cast<double>(esp_timer_get_time() / 1000000));
-        cJSON_AddNumberToObject(sys, "heap", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-        cJSON* stats = cJSON_AddObjectToObject(root, "stats");
-        cJSON_AddNumberToObject(stats, "appr", approved_.load());
-        cJSON_AddNumberToObject(stats, "deny", denied_.load());
-        if (!cJSON_PrintPreallocated(root, status_json_, sizeof(status_json_), false)) {
-            cJSON_Delete(root);
-            return esp_desktop_buddy_status_err(ESP_ERR_INVALID_SIZE, "status_too_large");
-        }
-        cJSON_Delete(root);
     }
     esp_desktop_buddy_json_object_view_t view{
         reinterpret_cast<const uint8_t*>(status_json_), strlen(status_json_)};
@@ -425,57 +350,11 @@ esp_desktop_buddy_status_reply_t BleService::status_trampoline(
     return static_cast<BleService*>(context)->status();
 }
 
-namespace {
-// Second advertiser: the Buddy transport stops advertising once a central is
-// connected, so a second app on the same computer (the Claude desktop app
-// next to the Bridge, or the other way round) could never discover the panel.
-// While linked, keep advertising so its scan finds the panel; macOS then
-// shares the existing link between both apps instead of opening a new one.
-std::atomic<bool> sharing_advertising{false};
-
-int sharing_gap_event(struct ble_gap_event* event, void*)
-{
-    if (event->type == BLE_GAP_EVENT_CONNECT) {
-        // Another central opened a link of its own; the transport serves one
-        // peer, so this extra link only keeps the slot until it is dropped.
-        sharing_advertising.store(false);
-        ESP_LOGW("ble_share", "extra BLE connection status=%d", event->connect.status);
-    } else if (event->type == BLE_GAP_EVENT_ADV_COMPLETE) {
-        sharing_advertising.store(false);
-    }
-    return 0;
-}
-
-void update_sharing_advertising(bool linked, bool alias_enabled)
-{
-    if (!alias_enabled) return;
-    if (linked && !ble_gap_adv_active()) {
-        uint8_t own_addr_type = 0;
-        if (ble_hs_id_infer_auto(0, &own_addr_type) != 0) return;
-        ble_gap_adv_params params{};
-        params.conn_mode = BLE_GAP_CONN_MODE_UND;
-        params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-        params.itvl_min = BLE_GAP_ADV_ITVL_MS(200);
-        params.itvl_max = BLE_GAP_ADV_ITVL_MS(300);
-        // Reuses the advertising and scan-response data the transport set.
-        const int rc = ble_gap_adv_start(own_addr_type, nullptr, BLE_HS_FOREVER,
-                                         &params, sharing_gap_event, nullptr);
-        sharing_advertising.store(rc == 0);
-        if (rc != 0) ESP_LOGW("ble_share", "advertising while linked failed rc=%d", rc);
-    } else if (!linked && sharing_advertising.exchange(false)) {
-        // Hand advertising back to the transport, which restarts its own.
-        ble_gap_adv_stop();
-    }
-}
-}  // namespace
-
 void BleService::transport_trampoline(
     void* context, const esp_desktop_buddy_transport_ble_event_t* event)
 {
     auto* self = static_cast<BleService*>(context);
     if (!self || !self->queue_ || !event) return;
-    update_sharing_advertising(event->state.connected && event->state.encrypted,
-                               self->share_link_);
     if (!event->state.connected && self->ota_) self->ota_->link_lost();
     self->queue_->send_link({
         event->state.connected, event->state.encrypted,
