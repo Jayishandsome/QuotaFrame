@@ -12,6 +12,7 @@
 #include "bsp/touch.h"
 #include "display_transport.hpp"
 #include "performance_probe.hpp"
+#include "pet/pet_overview.h"
 #include "usage_fonts/usage_fonts.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
@@ -754,6 +755,7 @@ bool DisplayUi::set_panel_power(bool on)
     lv_anim_delete(this, transition_brightness);
     transition_refresh_pending_ = false;
     if (!on) {
+        pet_overview_set_active(false);  // nothing to animate on a dark panel
         set_transition_brightness(0);
         // Not every panel driver implements display off; zero brightness
         // already darkens the panel, so the result is only logged.
@@ -1162,73 +1164,43 @@ void DisplayUi::build_overview(lv_obj_t* screen)
     lv_obj_add_event_cb(
         overview_panel_, gesture_event, LV_EVENT_GESTURE, this);
 
-    for (size_t i = 0; i < 2; ++i) {
-        const Provider provider = i == 0 ? Provider::Codex : Provider::Claude;
-        const uint32_t accent = provider_color(provider);
-        const int cx = OV_COLUMN_CX[i];
-        const int left = cx - OV_ROW_HALF_W;
-        ProviderWidgets& widgets = overview_[i];
-        widgets.panel = overview_panel_;
-        widgets.compact = true;
-
-        widgets.ring.rings = make_rings(
-            overview_panel_, cx, OV_RING_CY, OV_CELL,
-            OV_RING_D, OV_RING_W, COLOR_TRACK,
-            OV_INNER_D, OV_INNER_W, COLOR_TRACK_INNER);
-        widgets.ring.value = make_centered_label(
-            overview_panel_, "--", cx, OV_RING_CY - 6, OV_INNER_D - 30,
-            &pixel_press_24, COLOR_DIM);
-        make_centered_label(
-            overview_panel_, "LEFT", cx, OV_RING_CY + 20, 60,
-            &pixel_silk_16, COLOR_MUTED);
-
-        // Square and name are centred as one group under the ring.
-        lv_obj_t* name_row = lv_obj_create(overview_panel_);
-        lv_obj_remove_style_all(name_row);
-        lv_obj_set_size(name_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(name_row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(
-            name_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-            LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(name_row, 10, 0);
-        lv_obj_align(name_row, LV_ALIGN_TOP_MID, cx - SCREEN_W / 2,
-                     OV_NAME_Y - 8);
-        widgets.name_dot = make_dot(name_row, 0, 0, 10, accent);
-        make_label(name_row, provider == Provider::Codex ? "CODEX" : "CLAUDE",
-                   0, 0, &pixel_press_16, COLOR_TEXT);
-
-        // Label on the left, value right-aligned across the column.
-        auto row = [&](const char* label, int y) {
-            make_label(overview_panel_, label, left,
-                       y - lv_font_get_line_height(&pixel_silk_16) / 2,
-                       &pixel_silk_16, COLOR_DIM);
-            lv_obj_t* value = make_label(
-                overview_panel_, "--", left,
-                y - lv_font_get_line_height(&pixel_press_16) / 2,
-                &pixel_press_16, COLOR_DIM);
-            lv_obj_set_width(value, 2 * OV_ROW_HALF_W);
-            lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
-            return value;
-        };
-        widgets.short_reset = row("RESET", OV_RESET_Y);
-        widgets.short_in = make_label(
-            overview_panel_, "", left,
-            OV_RESET_IN_Y - lv_font_get_line_height(&pixel_silk_16) / 2,
-            &pixel_silk_16, COLOR_DIM);
-        lv_obj_set_width(widgets.short_in, 2 * OV_ROW_HALF_W);
-        lv_obj_set_style_text_align(widgets.short_in, LV_TEXT_ALIGN_RIGHT, 0);
-        widgets.week_value = row("WEEK", OV_WEEK_Y);
-        for (int cell = 0; cell < WEEK_BAR_CELLS; ++cell) {
-            widgets.week_cells[cell] = make_dot(
-                overview_panel_, left + cell * OV_BAR_PITCH, OV_WEEK_BAR_Y,
-                OV_BAR_PITCH - 2, COLOR_TRACK);
-        }
-        widgets.pace_value = make_centered_label(
-            overview_panel_, "", cx, OV_PACE_Y, 2 * OV_ROW_HALF_W,
-            &pixel_silk_16, COLOR_DIM);
-        widgets.status = widgets.pace_value;
-    }
+    // The flying-orb pet reacts to both quotas; a card per provider below it.
+    pet_overview_create(overview_panel_);
 }
+
+namespace {
+/** Condenses one provider's snapshot into what the pet page shows. */
+pet_provider_t pet_provider_view(const UsageModel& model, Provider provider,
+                                 bool connected, uint64_t now_ms)
+{
+    pet_provider_t view{};
+    const auto state = model.display_state(provider, connected);
+    const auto& snapshot = model.snapshot(provider);
+    const bool partial = snapshot.source_state == SourceState::Partial;
+    view.state = state == DisplayState::Online ? PET_ONLINE
+        : state == DisplayState::Partial ? PET_PARTIAL
+        : state == DisplayState::Offline ? PET_OFFLINE : PET_NO_DATA;
+    view.short_present = snapshot.has_valid_data &&
+        snapshot.short_window.present && (!partial || snapshot.latest_short_present);
+    view.week_present = snapshot.has_valid_data &&
+        snapshot.week_window.present && (!partial || snapshot.latest_week_present);
+    const uint8_t short_used = std::min<uint8_t>(snapshot.short_window.used_percent, 100);
+    view.short_left = static_cast<uint8_t>(100 - short_used);
+    view.week_used = std::min<uint8_t>(snapshot.week_window.used_percent, 100);
+    const uint32_t epoch =
+        snapshot.has_valid_data ? model.estimated_epoch(provider, now_ms) : 0;
+    if (view.short_present) {
+        format_countdown(snapshot.short_window.has_reset, snapshot.short_window.reset_at,
+                         epoch, view.countdown, sizeof(view.countdown));
+        const int32_t elapsed =
+            elapsed_percent(snapshot.short_window, SHORT_WINDOW_SECONDS, epoch);
+        const bool fresh = state == DisplayState::Online || state == DisplayState::Partial;
+        view.pace_known = fresh && elapsed >= 0;
+        view.pace = static_cast<int16_t>(view.pace_known ? int32_t{short_used} - elapsed : 0);
+    }
+    return view;
+}
+}  // namespace
 
 void DisplayUi::build_provider_page(lv_obj_t* screen, Provider provider)
 {
@@ -1927,6 +1899,9 @@ void DisplayUi::render(
         transition_refresh_pending_ = set_transition_brightness(0);
     }
     input_enabled_.store(input_enabled && !has_passkey, std::memory_order_relaxed);
+    pet_overview_set_active(
+        panel_on_ && !ota_visible && !screensaver_visible && page == Page::Overview &&
+        !(settings_visible_.load(std::memory_order_relaxed) && !has_passkey));
     ota_active_.store(ota.phase != OtaPhase::Idle, std::memory_order_relaxed);
     ota_confirming_.store(
         ota.phase == OtaPhase::Confirming, std::memory_order_relaxed);
@@ -2069,11 +2044,13 @@ void DisplayUi::render(
     }
     lv_obj_add_flag(screensaver_panel_, LV_OBJ_FLAG_HIDDEN);
     show_page(page, /*animate=*/true);
+    pet_view_t pet_view{};
+    pet_view.connected = connected;
+    pet_view.provider[0] = pet_provider_view(model, Provider::Codex, connected, now_ms);
+    pet_view.provider[1] = pet_provider_view(model, Provider::Claude, connected, now_ms);
+    pet_overview_update(&pet_view);
     for (Provider provider : {Provider::Codex, Provider::Claude}) {
         const size_t index = provider_index(provider);
-        update_provider(
-            overview_[index], model, provider, connected, now_ms,
-            presentation.clock);
         update_provider(
             provider_pages_[index], model, provider, connected, now_ms,
             presentation.clock);

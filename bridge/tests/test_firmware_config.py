@@ -228,6 +228,8 @@ class FirmwareConfigurationTests(unittest.TestCase):
             "CONFIG_LV_USE_BAR": "y",
             "CONFIG_LV_USE_CANVAS": "y",
             "CONFIG_LV_USE_IMAGE": "y",
+            "CONFIG_LV_USE_ARC": "y",     # pet smile
+            "CONFIG_LV_USE_LINE": "y",    # pet brows
             "CONFIG_LV_USE_BUTTON": "y",
             "CONFIG_LV_USE_LABEL": "y",
             "CONFIG_LV_USE_FLEX": "y",
@@ -248,7 +250,6 @@ class FirmwareConfigurationTests(unittest.TestCase):
 
         unused_widgets = (
             "CONFIG_LV_USE_ANIMIMG",
-            "CONFIG_LV_USE_ARC",
             "CONFIG_LV_USE_BUTTONMATRIX",
             "CONFIG_LV_USE_CALENDAR",
             "CONFIG_LV_USE_CHART",
@@ -257,7 +258,6 @@ class FirmwareConfigurationTests(unittest.TestCase):
             "CONFIG_LV_USE_IMAGEBUTTON",
             "CONFIG_LV_USE_KEYBOARD",
             "CONFIG_LV_USE_LED",
-            "CONFIG_LV_USE_LINE",
             "CONFIG_LV_USE_LIST",
             "CONFIG_LV_USE_MENU",
             "CONFIG_LV_USE_MSGBOX",

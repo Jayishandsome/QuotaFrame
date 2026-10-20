@@ -6,6 +6,12 @@ idf_component_register(
         "performance_probe.cpp"
         "orientation.cpp"
         "power_monitor.cpp"
+        "pet/orb.c"
+        "pet/orb_assets.c"
+        "pet/pet_overview.c"
+        "pet/fonts/pet_ui_16.c"
+        "pet/fonts/pet_ui_20.c"
+        "pet/fonts/pet_num_44.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
