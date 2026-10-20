@@ -948,6 +948,7 @@ static void tick(lv_timer_t *timer)
         if (since % 1000 < 40) update_clock();
         if (!panel_off && !on_usb && inactive >= PANEL_OFF_AFTER_MS) {
             panel_off = true;
+            lv_anim_delete(sleep_orb, NULL);  // nothing to animate on a dark panel
             brightness(0);
         }
     }

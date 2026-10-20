@@ -416,6 +416,7 @@ static void battery_task(void *arg)
     pmu_update_bits(0x30, 0x01, 0x01);  // battery voltage ADC
     pmu_update_bits(0x62, 0x1F, 0x0B);  // charge current 500 mA (1000 mAh cell)
     pmu_update_bits(0x16, 0x07, 0x03);  // USB input limit 1000 mA
+    int log_ticks = 0;
     while (true) {
         int s1 = pmu_read(0x00), s2 = pmu_read(0x01);
         if (s1 >= 0 && s2 >= 0) {
@@ -427,9 +428,15 @@ static void battery_task(void *arg)
             bool charging = present && ((s2 >> 5) & 0x07) == 0x01;
             int pct = present ? pmu_read(0xA4) : -1;
             ui_set_battery(pct > 100 ? 100 : pct, charging, vbus);
+            static const char *const STATES[] = {"trickle", "precharge", "constant-current",
+                                                 "constant-voltage", "full", "not-charging"};
+            int state = s2 & 0x07;
+            if (log_ticks % 6 == 0) {
+                ESP_LOGI(TAG, "battery: %d%% %dmV usb=%d charge=%s", pct, mv, vbus,
+                         state < 6 ? STATES[state] : "unknown");
+            }
         }
-        static int ticks;
-        if (++ticks % 6 == 1) {
+        if (++log_ticks % 6 == 1) {
             ESP_LOGI(TAG, "heap: internal %u free, largest DMA block %u, PSRAM %u free",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
@@ -558,15 +565,23 @@ static void network_task(void *arg)
     vTaskDelete(NULL);
 }
 
+static esp_timer_handle_t reconnect_timer;
+static int reconnect_delay_s = 2;
+static void reconnect(void *arg) { (void)arg; esp_wifi_connect(); }
+
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg; (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        // Back off when the home network is out of reach: every attempt scans
+        // all channels, which costs a lot of battery if repeated nonstop.
         ui_set_link(false);
-        esp_wifi_connect();
+        esp_timer_start_once(reconnect_timer, (uint64_t)reconnect_delay_s * 1000000);
+        reconnect_delay_s = reconnect_delay_s >= 60 ? 120 : reconnect_delay_s * 2;
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        reconnect_delay_s = 2;
         ESP_LOGI(TAG, "Wi-Fi connected");
         if (!atomic_exchange(&network_started, true)) xTaskCreate(network_task, "network", 6144, NULL, 4, NULL);
     }
@@ -627,6 +642,8 @@ void app_main(void)
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    const esp_timer_create_args_t retry = {.callback = reconnect, .name = "wifi_retry"};
+    ESP_ERROR_CHECK(esp_timer_create(&retry, &reconnect_timer));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL));
     wifi_config_t wifi = {0};
