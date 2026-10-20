@@ -737,13 +737,17 @@ static void reconnect(void *arg)
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    (void)arg; (void)data;
+    (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        ESP_LOGI(TAG, "Wi-Fi: %d saved network(s)", wifi_count);
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         // Back off when the home network is out of reach: every attempt scans
         // all channels, which costs a lot of battery if repeated nonstop.
         // Try the next saved network; wait longer only after all of them failed.
+        const wifi_event_sta_disconnected_t *info = data;
+        ESP_LOGW(TAG, "Wi-Fi network %d of %d not joined (reason %d)", wifi_index + 1, wifi_count,
+                 info ? info->reason : -1);
         ui_set_link(false);
         wifi_index = (wifi_index + 1) % wifi_count;
         int delay = wifi_index == 0 ? reconnect_delay_s : 1;
