@@ -139,6 +139,7 @@ private:
     char advertising_prefix_[20]{};
     char advertising_name_[32]{};
     std::atomic<bool> claude_changed_{false};
+    bool share_link_ = false;  // keep advertising while linked (Claude alias)
     char status_name_[129]{};
     char target_[32]{};
     char status_json_[1024]{};

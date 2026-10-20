@@ -130,7 +130,8 @@ esp_err_t BleService::start(AppEventQueue& queue, const BleServiceConfig& config
             advertising_name_, sizeof(advertising_name_))) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (config.advertising_alias != nullptr && config.advertising_alias[0] != '\0') {
+    share_link_ = config.advertising_alias != nullptr && config.advertising_alias[0] != '\0';
+    if (share_link_) {
         // The scan response carries only the name: 29 bytes at most.
         char aliased[sizeof(advertising_name_)]{};
         const int written = snprintf(aliased, sizeof(aliased), "%s%s",
@@ -401,11 +402,57 @@ esp_desktop_buddy_status_reply_t BleService::status_trampoline(
     return static_cast<BleService*>(context)->status();
 }
 
+namespace {
+// Second advertiser: the Buddy transport stops advertising once a central is
+// connected, so a second app on the same computer (the Claude desktop app
+// next to the Bridge, or the other way round) could never discover the panel.
+// While linked, keep advertising so its scan finds the panel; macOS then
+// shares the existing link between both apps instead of opening a new one.
+std::atomic<bool> sharing_advertising{false};
+
+int sharing_gap_event(struct ble_gap_event* event, void*)
+{
+    if (event->type == BLE_GAP_EVENT_CONNECT) {
+        // Another central opened a link of its own; the transport serves one
+        // peer, so this extra link only keeps the slot until it is dropped.
+        sharing_advertising.store(false);
+        ESP_LOGW("ble_share", "extra BLE connection status=%d", event->connect.status);
+    } else if (event->type == BLE_GAP_EVENT_ADV_COMPLETE) {
+        sharing_advertising.store(false);
+    }
+    return 0;
+}
+
+void update_sharing_advertising(bool linked, bool alias_enabled)
+{
+    if (!alias_enabled) return;
+    if (linked && !ble_gap_adv_active()) {
+        uint8_t own_addr_type = 0;
+        if (ble_hs_id_infer_auto(0, &own_addr_type) != 0) return;
+        ble_gap_adv_params params{};
+        params.conn_mode = BLE_GAP_CONN_MODE_UND;
+        params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+        params.itvl_min = BLE_GAP_ADV_ITVL_MS(200);
+        params.itvl_max = BLE_GAP_ADV_ITVL_MS(300);
+        // Reuses the advertising and scan-response data the transport set.
+        const int rc = ble_gap_adv_start(own_addr_type, nullptr, BLE_HS_FOREVER,
+                                         &params, sharing_gap_event, nullptr);
+        sharing_advertising.store(rc == 0);
+        if (rc != 0) ESP_LOGW("ble_share", "advertising while linked failed rc=%d", rc);
+    } else if (!linked && sharing_advertising.exchange(false)) {
+        // Hand advertising back to the transport, which restarts its own.
+        ble_gap_adv_stop();
+    }
+}
+}  // namespace
+
 void BleService::transport_trampoline(
     void* context, const esp_desktop_buddy_transport_ble_event_t* event)
 {
     auto* self = static_cast<BleService*>(context);
     if (!self || !self->queue_ || !event) return;
+    update_sharing_advertising(event->state.connected && event->state.encrypted,
+                               self->share_link_);
     if (!event->state.connected && self->ota_) self->ota_->link_lost();
     self->queue_->send_link({
         event->state.connected, event->state.encrypted,
