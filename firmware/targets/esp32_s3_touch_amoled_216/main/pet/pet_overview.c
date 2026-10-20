@@ -26,13 +26,14 @@ LV_FONT_DECLARE(pet_num_44);
 #define ORB_Y 8
 #define SAY_Y 250
 #define COL_W 180
-#define COL_CX0 128     // centre of the Codex column
-#define COL_CX1 352     // centre of the Claude column
+#define COL_CX0 120     // centre of the left half (Codex)
+#define COL_CX1 360     // centre of the right half (Claude)
+// Even rhythm: about 12 px of air between name, number, bar and reset line.
 #define NAME_Y 300
-#define VALUE_Y 320
-#define BAR_Y 374
-#define BAR_W 132
-#define RESET_Y 386
+#define VALUE_Y 326
+#define BAR_Y 372
+#define BAR_W 128
+#define RESET_Y 384
 
 #define LOW_LEFT 20     // below this the pet worries
 #define GOOD_LEFT 50    // at or above this the quota is "plenty"
@@ -46,7 +47,7 @@ static const char *const NAME[2] = {"Codex", "Claude"};
 static const uint32_t ACCENT[2] = {C_CODEX, C_CLAUDE};
 
 typedef struct {
-    lv_obj_t *head, *dot, *name, *value, *bar_fill, *reset;
+    lv_obj_t *head, *dot, *name, *figure, *value, *pct, *bar_fill, *reset;
 } card_t;
 
 static orb_t *pet;
@@ -161,7 +162,18 @@ static void build_card(card_t *c, lv_obj_t *parent, int index)
     c->name = text(c->head, &pet_ui_16, C_MUTED, NAME[index]);
     lv_obj_align(c->head, LV_ALIGN_TOP_MID, cx - PANEL_W / 2, NAME_Y);
 
-    c->value = centered(parent, &pet_num_44, C_DIM, "--", cx, VALUE_Y, COL_W);
+    // Big number with a small "%" beside it, centred as one group, so the
+    // digits themselves sit in the middle of the column.
+    c->figure = plain(parent);
+    lv_obj_set_size(c->figure, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(c->figure, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(c->figure, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(c->figure, 3, 0);
+    c->value = text(c->figure, &pet_num_44, C_DIM, "--");
+    c->pct = text(c->figure, &pet_ui_20, C_MUTED, "%");
+    lv_obj_set_style_translate_y(c->pct, 3, 0);  // share the digits' baseline
+    lv_obj_add_flag(c->pct, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(c->figure, LV_ALIGN_TOP_MID, cx - PANEL_W / 2, VALUE_Y);
 
     lv_obj_t *track = plain(parent);
     lv_obj_set_size(track, BAR_W, 4);
@@ -212,13 +224,18 @@ static void update_card(card_t *c, const pet_provider_t *p, int index)
     lv_obj_set_style_text_color(c->name, lv_color_hex(fresh ? C_MUTED : C_DIM), 0);
 
     if (p->short_present) {
-        lv_label_set_text_fmt(c->value, "%u%%", p->short_left);
+        lv_label_set_text_fmt(c->value, "%u", p->short_left);
+        lv_obj_remove_flag(c->pct, LV_OBJ_FLAG_HIDDEN);
         uint32_t color = fresh ? level_color(p->short_left) : C_DIM;
-        lv_obj_set_style_text_color(c->value, lv_color_hex(fresh && p->short_left >= GOOD_LEFT ? C_TEXT : color), 0);
+        const uint32_t ink = fresh && p->short_left >= GOOD_LEFT ? C_TEXT : color;
+        lv_obj_set_style_text_color(c->value, lv_color_hex(ink), 0);
+        lv_obj_set_style_text_color(c->pct, lv_color_hex(ink), 0);
+        lv_obj_set_style_text_opa(c->pct, LV_OPA_70, 0);
         lv_obj_set_width(c->bar_fill, LV_MAX(p->short_left ? 4 : 0, BAR_W * p->short_left / 100));
         lv_obj_set_style_bg_color(c->bar_fill, lv_color_hex(fresh ? color : C_DIM), 0);
     } else {
         lv_label_set_text(c->value, "--");
+        lv_obj_add_flag(c->pct, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(c->value, lv_color_hex(C_DIM), 0);
         lv_obj_set_width(c->bar_fill, 0);
     }
