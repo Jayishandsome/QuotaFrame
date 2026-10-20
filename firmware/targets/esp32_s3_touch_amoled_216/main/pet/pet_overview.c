@@ -24,10 +24,10 @@ LV_FONT_DECLARE(pet_num_44);
 #define PANEL_W 480
 #define ORB_SIZE 180
 #define ORB_Y 2
-#define SAY_Y 190
-#define CARD_Y 230
+#define SAY_Y 186
+#define CARD_Y 222
 #define CARD_W 210
-#define CARD_H 142
+#define CARD_H 158
 #define CARD_GAP 12
 #define CARD_PAD 16
 #define BAR_W (CARD_W - 2 * CARD_PAD)
@@ -167,10 +167,13 @@ static void build_card(card_t *c, lv_obj_t *parent, int index)
     lv_obj_set_style_radius(c->bar_fill, 4, 0);
     lv_obj_set_style_bg_opa(c->bar_fill, LV_OPA_COVER, 0);
 
-    c->week = text(c->card, &pet_ui_16, C_MUTED, "週剩 --");
-    lv_obj_set_pos(c->week, CARD_PAD, 110);
-    c->reset = text(c->card, &pet_ui_16, C_MUTED, "");
-    lv_obj_align(c->reset, LV_ALIGN_TOP_RIGHT, -CARD_PAD, 110);
+    // Two label/value rows: names on the left, values right-aligned.
+    lv_obj_set_pos(text(c->card, &pet_ui_16, C_MUTED, "重置"), CARD_PAD, 108);
+    c->reset = text(c->card, &pet_ui_16, C_TEXT, "--");
+    lv_obj_align(c->reset, LV_ALIGN_TOP_RIGHT, -CARD_PAD, 108);
+    lv_obj_set_pos(text(c->card, &pet_ui_16, C_MUTED, "本週剩餘"), CARD_PAD, 130);
+    c->week = text(c->card, &pet_ui_16, C_TEXT, "--");
+    lv_obj_align(c->week, LV_ALIGN_TOP_RIGHT, -CARD_PAD, 130);
 }
 
 void pet_overview_create(lv_obj_t *parent)
@@ -196,16 +199,6 @@ void pet_overview_create(lv_obj_t *parent)
     pet_overview_update(&empty);
 }
 
-/* "3h 05m" -> "3h05m": the card has no room for the space. */
-static const char *compact(const char *countdown)
-{
-    static char out[16];
-    size_t n = 0;
-    for (const char *c = countdown; *c && n + 1 < sizeof(out); ++c) if (*c != ' ') out[n++] = *c;
-    out[n] = 0;
-    return out;
-}
-
 static void update_card(card_t *c, const pet_provider_t *p, int index)
 {
     bool fresh = p->state == PET_ONLINE || p->state == PET_PARTIAL;
@@ -223,21 +216,23 @@ static void update_card(card_t *c, const pet_provider_t *p, int index)
         lv_obj_set_width(c->bar_fill, LV_MAX(p->short_left ? 8 : 0, BAR_W * p->short_left / 100));
         lv_obj_set_style_bg_color(c->bar_fill, lv_color_hex(fresh ? color : C_DIM), 0);
         if (p->countdown[0] && strcmp(p->countdown, "--") != 0) {
-            if (strcmp(p->countdown, "WAIT") == 0) lv_label_set_text(c->reset, "即將重置");
-            else lv_label_set_text_fmt(c->reset, "%s 後重置", compact(p->countdown));
+            if (strcmp(p->countdown, "WAIT") == 0) lv_label_set_text(c->reset, "即將");
+            else lv_label_set_text(c->reset, p->countdown);
         } else {
-            lv_label_set_text(c->reset, "");
+            lv_label_set_text(c->reset, "--");
         }
     } else {
         lv_label_set_text(c->value, "--");
         lv_obj_set_style_text_color(c->value, lv_color_hex(C_DIM), 0);
         lv_obj_set_width(c->bar_fill, 0);
-        lv_label_set_text(c->reset, "");
+        lv_label_set_text(c->reset, "--");
     }
-    if (p->week_present) lv_label_set_text_fmt(c->week, "週剩 %u%%", 100 - LV_MIN(p->week_used, 100));
-    else lv_label_set_text(c->week, "週剩 --");
-    lv_obj_set_style_text_color(c->week, lv_color_hex(fresh && p->week_present && p->week_used >= 100 - LOW_LEFT
-                                                          ? C_AMBER : C_MUTED), 0);
+    if (p->week_present) lv_label_set_text_fmt(c->week, "%u%%", 100 - LV_MIN(p->week_used, 100));
+    else lv_label_set_text(c->week, "--");
+    uint32_t week_color = !fresh || !p->week_present ? C_DIM
+                          : p->week_used >= 100 - LOW_LEFT ? C_AMBER : C_TEXT;
+    lv_obj_set_style_text_color(c->week, lv_color_hex(week_color), 0);
+    lv_obj_set_style_text_color(c->reset, lv_color_hex(fresh && p->short_present ? C_TEXT : C_DIM), 0);
 }
 
 /* Picks the pet's mood and line from the quotas it can see. */
