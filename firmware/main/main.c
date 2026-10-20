@@ -744,12 +744,37 @@ static void start_network_tasks(void)
     }
 }
 
+static atomic_int drop_reason;  // last disconnect reason, 0 = none pending
+
+static void remember_network(int index)
+{
+    nvs_handle_t nvs;
+    uint8_t saved = 0xff;
+    if (nvs_open("butler", NVS_READWRITE, &nvs) != ESP_OK) return;
+    if (nvs_get_u8(nvs, "wifi_last", &saved) != ESP_OK || saved != index) {
+        nvs_set_u8(nvs, "wifi_last", (uint8_t)index);
+        nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+}
+
+static int last_network(void)
+{
+    nvs_handle_t nvs;
+    uint8_t saved = 0;
+    if (nvs_open("butler", NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u8(nvs, "wifi_last", &saved);
+        nvs_close(nvs);
+    }
+    return saved < wifi_count ? saved : 0;
+}
+
 static void wifi_task(void *arg)
 {
     (void)arg;
-    const int attempt_s = 15;
-    int waited = 0, pause = 0, rounds = 0;
-    ESP_LOGI(TAG, "Wi-Fi: %d saved network(s); trying network 1", wifi_count);
+    const int attempt_s = 20, max_retries = 4;
+    int waited = 0, pause = 0, rounds = 0, tried = 0, retries = 0, retry_in = 0;
+    ESP_LOGI(TAG, "Wi-Fi: %d saved network(s); trying network %d", wifi_count, wifi_index + 1);
     esp_wifi_connect();
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -758,13 +783,22 @@ static void wifi_task(void *arg)
         if (up) {
             if (!atomic_exchange(&has_ip, true)) {
                 ESP_LOGI(TAG, "Wi-Fi connected (saved network %d of %d)", wifi_index + 1, wifi_count);
+                remember_network(wifi_index);
+                esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
                 start_network_tasks();
             }
-            waited = pause = rounds = 0;
+            waited = pause = rounds = tried = retries = retry_in = 0;
+            atomic_store(&drop_reason, 0);
             continue;
         }
-        if (atomic_exchange(&has_ip, false)) ui_set_link(false);
+        if (atomic_exchange(&has_ip, false)) {
+            // Lost an existing connection: start a fresh window on the same network.
+            ui_set_link(false);
+            esp_wifi_set_ps(WIFI_PS_NONE);
+            waited = retries = 0;
+        }
         if (pause > 0) {
+            atomic_store(&drop_reason, 0);
             if (--pause == 0) {
                 ESP_LOGI(TAG, "Wi-Fi: trying network %d again", wifi_index + 1);
                 use_network(wifi_index);
@@ -772,11 +806,28 @@ static void wifi_task(void *arg)
             }
             continue;
         }
+        /*
+         * The network was found but dropped us (phone hotspots often kick the
+         * first association, or the link fell over): retry the same network a
+         * few times before moving on. "Not found" (201) is not retried.
+         */
+        int reason = atomic_exchange(&drop_reason, 0);
+        if (reason && reason != WIFI_REASON_NO_AP_FOUND && retries < max_retries) {
+            retry_in = 1 + retries;  // 1 s, 2 s, 3 s, 4 s
+        }
+        if (retry_in > 0 && --retry_in == 0) {
+            ++retries;
+            ESP_LOGI(TAG, "Wi-Fi: retrying network %d (%d/%d)", wifi_index + 1, retries, max_retries);
+            esp_wifi_connect();
+            continue;
+        }
         if (++waited < attempt_s) continue;
-        waited = 0;
+        waited = retries = retry_in = 0;
         esp_wifi_disconnect();
+        atomic_store(&drop_reason, 0);
         wifi_index = (wifi_index + 1) % wifi_count;
-        if (wifi_index == 0) {
+        if (++tried >= wifi_count) {
+            tried = 0;
             ++rounds;
             pause = rounds < 3 ? 10 : rounds < 6 ? 60 : 120;  // seconds before the next round
             ESP_LOGW(TAG, "Wi-Fi: no saved network reachable; next try in %d s", pause);
@@ -791,12 +842,15 @@ static void wifi_task(void *arg)
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
-    if (base == WIFI_EVENT) ESP_LOGI(TAG, "Wi-Fi event %d", (int)id);
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *info = data;
-        ESP_LOGW(TAG, "Wi-Fi network %d of %d not joined (reason %d)", wifi_index + 1, wifi_count,
-                 info ? info->reason : -1);
+        int reason = info ? info->reason : -1;
+        ESP_LOGW(TAG, "Wi-Fi network %d of %d not joined (reason %d)", wifi_index + 1, wifi_count, reason);
+        // Our own disconnect while switching networks reports ASSOC_LEAVE: not a drop.
+        if (reason != WIFI_REASON_ASSOC_LEAVE) atomic_store(&drop_reason, reason);
         ui_set_link(false);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        ESP_LOGI(TAG, "Wi-Fi associated with network %d; waiting for an address", wifi_index + 1);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ESP_LOGI(TAG, "Wi-Fi got an address");
     }
@@ -861,8 +915,11 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    use_network(0);
+    wifi_index = last_network();  // start with the network that worked last time
+    use_network(wifi_index);
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+    // No power saving until the board has an address: some phone hotspots drop
+    // stations that start dozing during the handshake.
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     xTaskCreate(wifi_task, "wifi_supervisor", 3072, NULL, 3, NULL);
 }
