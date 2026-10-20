@@ -31,6 +31,7 @@
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
 #include "esp_wifi.h"
+#include "lwip/sockets.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "cJSON.h"
@@ -52,7 +53,12 @@ static _Atomic int64_t phase_since;  // esp_timer time of the last phase change
 static atomic_bool connected, network_started, mic_diagnostic, tone_diagnostic;
 static QueueHandle_t actions, tones;
 static SemaphoreHandle_t ui_mutex;
-static char ssid[33], password[65], uri[256], token[129], headers[180], ca_pem[CA_MAX + 1];
+#define WIFI_MAX 3
+#define DISCOVERY_PORT 8444
+static char ssid[WIFI_MAX][33], password[WIFI_MAX][65];
+static int wifi_count, wifi_index;
+static char uri[256], token[129], headers[180], ca_pem[CA_MAX + 1];
+static SemaphoreHandle_t ws_mutex;
 
 static void set_phase(phase_t p)
 {
@@ -532,9 +538,21 @@ static bool load_config(void)
 {
     nvs_handle_t nvs;
     if (nvs_open("butler", NVS_READONLY, &nvs) != ESP_OK) return false;
-    bool ok = get_string(nvs, "ssid", ssid, sizeof(ssid)) && get_string(nvs, "password", password, sizeof(password)) &&
+    bool ok = get_string(nvs, "ssid", ssid[0], sizeof(ssid[0])) &&
+              get_string(nvs, "password", password[0], sizeof(password[0])) &&
               get_string(nvs, "uri", uri, sizeof(uri)) && get_string(nvs, "token", token, sizeof(token)) &&
               get_string(nvs, "ca", ca_pem, sizeof(ca_pem));
+    wifi_count = ok ? 1 : 0;
+    // Optional extra networks (e.g. the phone's hotspot), tried in turn.
+    for (int i = 1; ok && i < WIFI_MAX; ++i) {
+        char ks[8], kp[12];
+        snprintf(ks, sizeof(ks), "ssid%d", i + 1);
+        snprintf(kp, sizeof(kp), "password%d", i + 1);
+        if (get_string(nvs, ks, ssid[wifi_count], sizeof(ssid[0])) && ssid[wifi_count][0] &&
+            get_string(nvs, kp, password[wifi_count], sizeof(password[0]))) {
+            ++wifi_count;
+        }
+    }
     nvs_close(nvs);
     return ok;
 }
@@ -564,6 +582,22 @@ static int provision(const char *line)
     nvs_handle_t nvs;
     if (ok && nvs_open("butler", NVS_READWRITE, &nvs) == ESP_OK) {
         for (int i = 0; i < 5; ++i) if (nvs_set_str(nvs, nvs_keys[i], values[i]) != ESP_OK) ok = false;
+        for (int n = 2; ok && n <= WIFI_MAX; ++n) {
+            char js[16], jp[20], ks[8], kp[12];
+            snprintf(js, sizeof(js), "wifi%d_ssid", n);
+            snprintf(jp, sizeof(jp), "wifi%d_password", n);
+            snprintf(ks, sizeof(ks), "ssid%d", n);
+            snprintf(kp, sizeof(kp), "password%d", n);
+            cJSON *s = cJSON_GetObjectItem(json, js), *pw = cJSON_GetObjectItem(json, jp);
+            if (cJSON_IsString(s) && s->valuestring[0] && strlen(s->valuestring) <= 32 &&
+                cJSON_IsString(pw) && strlen(pw->valuestring) <= 64) {
+                if (nvs_set_str(nvs, ks, s->valuestring) != ESP_OK || nvs_set_str(nvs, kp, pw->valuestring) != ESP_OK)
+                    ok = false;
+            } else {
+                nvs_erase_key(nvs, ks);
+                nvs_erase_key(nvs, kp);
+            }
+        }
         if (ok) ok = nvs_commit(nvs) == ESP_OK;
         nvs_close(nvs);
     } else {
@@ -603,27 +637,103 @@ static void usb_task(void *arg)
 
 /* ------------------------------------------------------------- network -- */
 
+/*
+ * The Mac backend broadcasts {"service":"grok-voice-remote","port":8443} on UDP
+ * 8444 every few seconds. When the board is not connected and hears it from a
+ * new address (e.g. on the phone hotspot), it reconnects there. The pinned
+ * certificate still has to match, so a fake announcement gets nowhere.
+ */
+static void discovery_task(void *arg)
+{
+    (void)arg;
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(DISCOVERY_PORT),
+                                .sin_addr.s_addr = htonl(INADDR_ANY)};
+    struct timeval timeout = {.tv_sec = 5};
+    if (sock < 0 || bind(sock, (struct sockaddr *)&local, sizeof(local)) < 0) {
+        ESP_LOGW(TAG, "Mac discovery unavailable");
+        if (sock >= 0) close(sock);
+        vTaskDelete(NULL);
+    }
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    int64_t offline_since = esp_timer_get_time();
+    char packet[128];
+    while (true) {
+        struct sockaddr_in from;
+        socklen_t len = sizeof(from);
+        int n = recvfrom(sock, packet, sizeof(packet) - 1, 0, (struct sockaddr *)&from, &len);
+        if (atomic_load(&connected)) offline_since = esp_timer_get_time();
+        if (n <= 0) continue;
+        packet[n] = 0;
+        cJSON *json = cJSON_Parse(packet);
+        cJSON *service = cJSON_GetObjectItem(json, "service"), *port = cJSON_GetObjectItem(json, "port");
+        if (cJSON_IsString(service) && !strcmp(service->valuestring, "grok-voice-remote") &&
+            cJSON_IsNumber(port) && port->valueint > 0 && port->valueint < 65536 &&
+            !atomic_load(&connected) && esp_timer_get_time() - offline_since > 3000000) {
+            char host[16], found[64];
+            inet_ntoa_r(from.sin_addr, host, sizeof(host));
+            snprintf(found, sizeof(found), "wss://%s:%d/ws", host, port->valueint);
+            xSemaphoreTake(ws_mutex, portMAX_DELAY);
+            if (strcmp(found, uri)) {
+                ESP_LOGI(TAG, "Mac found at %s", host);
+                snprintf(uri, sizeof(uri), "%s", found);
+                if (ws) {
+                    esp_websocket_client_stop(ws);
+                    esp_websocket_client_set_uri(ws, uri);
+                    esp_websocket_client_start(ws);
+                }
+            }
+            xSemaphoreGive(ws_mutex);
+            offline_since = esp_timer_get_time();
+        }
+        cJSON_Delete(json);
+    }
+}
+
 static void network_task(void *arg)
 {
     (void)arg;
     // Certificate validity checks need a real clock; never disable TLS verification.
     esp_sntp_config_t time_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     ESP_ERROR_CHECK(esp_netif_sntp_init(&time_config));
-    while (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(30000)) != ESP_OK) ESP_LOGW(TAG, "Waiting for network time");
-    rtc_save();
+    // TLS needs a real date: network time, or the clock chip's time if the
+    // network (e.g. a hotspot without internet) can't provide it.
+    while (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(15000)) != ESP_OK) {
+        if (time(NULL) > 1700000000) break;
+        ESP_LOGW(TAG, "Waiting for network time");
+    }
+    if (esp_netif_sntp_sync_wait(0) == ESP_OK) rtc_save();
     snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\n", token);
+    xSemaphoreTake(ws_mutex, portMAX_DELAY);
+    // The Mac's address changes between networks, so the certificate is pinned
+    // instead of matched by name: only the Mac holding config/server.key passes.
     esp_websocket_client_config_t cfg = {.uri = uri, .headers = headers, .cert_pem = ca_pem,
+        .skip_cert_common_name_check = true,
         .buffer_size = 2048, .reconnect_timeout_ms = 5000, .network_timeout_ms = 5000,
         .ping_interval_sec = 20};
     ws = esp_websocket_client_init(&cfg);
     ESP_ERROR_CHECK(esp_websocket_register_events(ws, WEBSOCKET_EVENT_ANY, websocket_event, NULL));
     ESP_ERROR_CHECK(esp_websocket_client_start(ws));
+    xSemaphoreGive(ws_mutex);
     vTaskDelete(NULL);
 }
 
 static esp_timer_handle_t reconnect_timer;
 static int reconnect_delay_s = 2;
-static void reconnect(void *arg) { (void)arg; esp_wifi_connect(); }
+static void use_network(int index)
+{
+    wifi_config_t wifi = {0};
+    memcpy(wifi.sta.ssid, ssid[index], strlen(ssid[index]));
+    memcpy(wifi.sta.password, password[index], strlen(password[index]));
+    esp_wifi_set_config(WIFI_IF_STA, &wifi);
+}
+
+static void reconnect(void *arg)
+{
+    (void)arg;
+    use_network(wifi_index);
+    esp_wifi_connect();
+}
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -633,13 +743,19 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         // Back off when the home network is out of reach: every attempt scans
         // all channels, which costs a lot of battery if repeated nonstop.
+        // Try the next saved network; wait longer only after all of them failed.
         ui_set_link(false);
-        esp_timer_start_once(reconnect_timer, (uint64_t)reconnect_delay_s * 1000000);
-        reconnect_delay_s = reconnect_delay_s >= 60 ? 120 : reconnect_delay_s * 2;
+        wifi_index = (wifi_index + 1) % wifi_count;
+        int delay = wifi_index == 0 ? reconnect_delay_s : 1;
+        if (wifi_index == 0) reconnect_delay_s = reconnect_delay_s >= 60 ? 120 : reconnect_delay_s * 2;
+        esp_timer_start_once(reconnect_timer, (uint64_t)delay * 1000000);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         reconnect_delay_s = 2;
-        ESP_LOGI(TAG, "Wi-Fi connected");
-        if (!atomic_exchange(&network_started, true)) xTaskCreate(network_task, "network", 6144, NULL, 4, NULL);
+        ESP_LOGI(TAG, "Wi-Fi connected (saved network %d of %d)", wifi_index + 1, wifi_count);
+        if (!atomic_exchange(&network_started, true)) {
+            xTaskCreate(network_task, "network", 6144, NULL, 4, NULL);
+            xTaskCreate(discovery_task, "discovery", 4096, NULL, 3, NULL);
+        }
     }
 }
 
@@ -660,7 +776,8 @@ void app_main(void)
     actions = xQueueCreate(8, 1);
     tones = xQueueCreate(4, 1);
     ui_mutex = xSemaphoreCreateMutex();
-    assert(actions && tones && ui_mutex);
+    ws_mutex = xSemaphoreCreateMutex();
+    assert(actions && tones && ui_mutex && ws_mutex);
     usb_serial_jtag_driver_config_t usb = {.tx_buffer_size = 1024, .rx_buffer_size = 4096};
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb));
 
@@ -702,11 +819,8 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_timer_create(&retry, &reconnect_timer));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL));
-    wifi_config_t wifi = {0};
-    memcpy(wifi.sta.ssid, ssid, strlen(ssid));
-    memcpy(wifi.sta.password, password, strlen(password));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi));
+    use_network(0);
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 }
