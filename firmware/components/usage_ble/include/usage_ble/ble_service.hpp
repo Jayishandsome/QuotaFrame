@@ -15,6 +15,21 @@ namespace usage_panel {
 /** Returns the current public UI location, such as overview/codex/claude. */
 using UiLocationGetter = const char* (*)(void*);
 
+/**
+ * What the Claude desktop app (Developer -> Hardware Buddy) last reported.
+ * Strings are truncated copies; `prompt_id` is echoed back unchanged.
+ */
+struct ClaudeSnapshot {
+    bool live = false;          // a heartbeat arrived within the last ~30 s
+    uint32_t total = 0;         // open sessions
+    uint32_t running = 0;       // sessions generating
+    uint32_t waiting = 0;       // sessions blocked on a permission prompt
+    bool prompt = false;        // a permission decision is pending
+    char prompt_id[72]{};
+    char tool[48]{};
+    char hint[192]{};
+};
+
 /** Configuration copied or retained by BleService::start(). */
 struct BleServiceConfig {
     // Identity strings are copied into fixed service-owned buffers during start.
@@ -28,6 +43,9 @@ struct BleServiceConfig {
     void* ui_context;
     bool enable_screen_toggle = false;
     bool enable_screen_page = false;
+    // Optional text put in front of the advertised name. The Claude desktop
+    // picker lists devices whose name starts with "Claude".
+    const char* advertising_alias = nullptr;
 };
 
 /**
@@ -85,6 +103,13 @@ public:
     /** Clears all stored BLE bonds for a device-local recovery action. */
     esp_desktop_buddy_command_result_t reset_pairing();
 
+    /** True once after the Claude desktop app changed its snapshot or liveness. */
+    bool take_claude_changed() { return claude_changed_.exchange(false); }
+    /** Copies the Claude desktop app's current state. */
+    void claude_snapshot(ClaudeSnapshot& out);
+    /** Answers the pending permission prompt `prompt_id` (approve once or deny). */
+    esp_err_t claude_reply(const char* prompt_id, bool approve);
+
 private:
     static esp_desktop_buddy_command_extension_result_t usage_trampoline(
         void*, esp_desktop_buddy_t*, const esp_desktop_buddy_command_view_t*);
@@ -102,6 +127,7 @@ private:
         void*, esp_desktop_buddy_t*);
     static void transport_trampoline(
         void*, const esp_desktop_buddy_transport_ble_event_t*);
+    static void buddy_event_trampoline(void*, const esp_desktop_buddy_event_t*);
     bool reset_folder_push();
 
     AppEventQueue* queue_ = nullptr;
@@ -111,7 +137,8 @@ private:
     esp_desktop_buddy_transport_ble_t* transport_ = nullptr;
     esp_desktop_buddy_folder_push_t* folder_push_ = nullptr;
     char advertising_prefix_[20]{};
-    char advertising_name_[24]{};
+    char advertising_name_[32]{};
+    std::atomic<bool> claude_changed_{false};
     char status_name_[129]{};
     char target_[32]{};
     char status_json_[1024]{};

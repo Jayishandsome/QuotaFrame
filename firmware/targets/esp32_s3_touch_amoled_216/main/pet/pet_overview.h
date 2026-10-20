@@ -27,6 +27,7 @@ typedef struct {
 
 typedef struct {
     bool connected;
+    bool claude_working;         // the Claude desktop app is generating
     pet_provider_t provider[2];  // 0 = Codex, 1 = Claude
 } pet_view_t;
 

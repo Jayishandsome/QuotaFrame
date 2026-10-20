@@ -53,6 +53,19 @@ class NusTransportError(TransportConnectionError):
     """Scanning, pairing, GATT negotiation, writing, or ACK failed."""
 
 
+# Panels that also talk to the Claude desktop app advertise "Claude-QF-...",
+# because its Hardware Buddy picker lists names starting with "Claude".
+CLAUDE_NAME_ALIAS = "Claude-"
+
+
+def public_device_name(name: str) -> str:
+    """Strips the Claude picker alias so filters see the QF name."""
+
+    if name.startswith(CLAUDE_NAME_ALIAS + "QF-"):
+        return name[len(CLAUDE_NAME_ALIAS):]
+    return name
+
+
 def matches_device_name(
     name: object,
     *,
@@ -63,9 +76,10 @@ def matches_device_name(
 
     if not isinstance(name, str):
         return False
-    return (name.startswith("QF-") and len(name) > 3
-            and (exact_name is None or name == exact_name)
-            and any(name.startswith(prefix) for prefix in name_prefixes))
+    public = public_device_name(name)
+    return (public.startswith("QF-") and len(public) > 3
+            and (exact_name is None or exact_name in (name, public))
+            and any(public.startswith(prefix) for prefix in name_prefixes))
 
 
 def chunk_payload(

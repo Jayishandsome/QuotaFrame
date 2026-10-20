@@ -1,8 +1,11 @@
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <atomic>
 
 #include "bsp/esp-bsp.h"
 #include "display_ui.hpp"
+#include "pet/claude_prompt.h"
 #include "memory_telemetry.hpp"
 #include "performance_probe.hpp"
 #include "usage_panel_state/panel_presentation.hpp"
@@ -114,6 +117,8 @@ const BleServiceConfig ble_config{
     .ui_context = &status_page,
     .enable_screen_toggle = true,
     .enable_screen_page = true,
+    // Lets the Claude desktop app's Hardware Buddy picker list the panel.
+    .advertising_alias = "Claude-",
 };
 
 bool init_orientation_sensor(qmi8658_dev_t& sensor)
@@ -266,6 +271,9 @@ extern "C" void app_main(void)
     uint64_t next_power_poll_ms = 0;
     uint64_t next_power_key_poll_ms = 0;
     uint64_t screensaver_since_ms = 0;  // 0 while the screensaver is inactive.
+    ClaudeSnapshot claude{};
+    ClaudePromptState claude_state{};
+    uint32_t claude_serial = 0;
     bool panel_on = true;
     ScreensaverController screensaver(
         static_cast<uint64_t>(settings.clock_timeout_seconds) *
@@ -305,6 +313,48 @@ extern "C" void app_main(void)
                 page = screensaver.restore_page();
                 status_page.store(page, std::memory_order_relaxed);
             }
+            dirty = true;
+        }
+        // Claude desktop app (Hardware Buddy): permission prompts and activity.
+        if (ble.take_claude_changed()) {
+            ClaudeSnapshot next{};
+            ble.claude_snapshot(next);
+            const bool new_prompt = next.prompt &&
+                (!claude.prompt || std::strcmp(next.prompt_id, claude.prompt_id) != 0);
+            claude = next;
+            if (new_prompt) {
+                ++claude_serial;
+                claude_state.reply = CLAUDE_REPLY_NONE;
+                // Wake the panel like a touch would.
+                const bool was_asleep = screensaver.view(now_ms).active;
+                screensaver.note_touch_down(now_ms);
+                if (was_asleep) {
+                    page = screensaver.restore_page();
+                    status_page.store(page, std::memory_order_relaxed);
+                }
+                ESP_LOGI(TAG, "Claude permission prompt (%s)", claude.tool);
+            }
+            claude_state.show = claude.prompt;
+            claude_state.working = claude.live && claude.running > 0;
+            claude_state.waiting = claude.waiting;
+            claude_state.serial = claude_serial;
+            std::snprintf(claude_state.tool, sizeof(claude_state.tool), "%s", claude.tool);
+            std::snprintf(claude_state.hint, sizeof(claude_state.hint), "%s", claude.hint);
+            ui.set_claude(claude_state);
+            dirty = true;
+        }
+        const ClaudeDecision decision = ui.take_claude_decision();
+        if (decision != ClaudeDecision::None && claude.prompt &&
+            (claude_state.reply == CLAUDE_REPLY_NONE || claude_state.reply == CLAUDE_REPLY_FAILED)) {
+            const bool approve = decision == ClaudeDecision::Allow;
+            const esp_err_t reply_error = ble.claude_reply(claude.prompt_id, approve);
+            if (reply_error != ESP_OK) {
+                ESP_LOGW(TAG, "Claude permission reply failed: %s", esp_err_to_name(reply_error));
+            }
+            claude_state.reply = reply_error != ESP_OK ? CLAUDE_REPLY_FAILED
+                : approve ? CLAUDE_REPLY_ALLOWED : CLAUDE_REPLY_DENIED;
+            ui.set_claude(claude_state);
+            screensaver.note_touch_down(now_ms);
             dirty = true;
         }
         if (retain_ota_failure(ota_view, shown_failure, now_ms)) {
@@ -515,7 +565,8 @@ extern "C" void app_main(void)
         screensaver.set_idle_delay(static_cast<uint64_t>(settings.clock_timeout_seconds) * 1000);
         screensaver.update(
             now_ms, page, ble_link.has_passkey,
-            ota_view.phase != OtaPhase::Idle || show_ota_error || settings_open);
+            ota_view.phase != OtaPhase::Idle || show_ota_error || settings_open ||
+            claude.prompt);
         const ScreensaverView screensaver_view = screensaver.view(now_ms);
         if (!screensaver_view.active) screensaver_since_ms = 0;
         else if (screensaver_since_ms == 0) screensaver_since_ms = now_ms;
@@ -546,7 +597,7 @@ extern "C" void app_main(void)
         const bool panel_wanted = !on_battery || BATTERY_SCREEN_OFF_MS == 0 ||
             screensaver_since_ms == 0 ||
             now_ms - screensaver_since_ms < BATTERY_SCREEN_OFF_MS ||
-            ble_link.has_passkey || ota_visible || settings_open;
+            ble_link.has_passkey || ota_visible || settings_open || claude.prompt;
         if (panel_wanted != panel_on && ui.set_panel_power(panel_wanted)) {
             panel_on = panel_wanted;
             if (panel_on) dirty = true;

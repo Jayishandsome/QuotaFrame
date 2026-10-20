@@ -24,8 +24,27 @@ namespace usage_panel::amoled {
  * applies on its own loop. The flags carry no associated payload, so relaxed
  * ordering is sufficient for these event latches.
  */
+/** What the Claude desktop app is asking, as the UI shows it. */
+struct ClaudePromptState {
+    bool show = false;          // a permission decision is pending
+    bool working = false;       // a session is generating
+    char tool[48]{};
+    char hint[192]{};
+    uint32_t waiting = 0;
+    uint8_t reply = 0;          // claude_reply_t
+    uint32_t serial = 0;        // changes with every new prompt
+};
+
+/** Button pressed on the Claude permission card. */
+enum class ClaudeDecision : uint8_t { None, Allow, Deny };
+
 class DisplayUi {
 public:
+    /** Takes effect on the next render(). */
+    void set_claude(const ClaudePromptState& state) { claude_ = state; }
+    /** Consumes one Allow/Deny press from the Claude permission card. */
+    ClaudeDecision take_claude_decision();
+
     /** Initializes display/touch/LVGL and builds the complete object tree. */
     bool begin(ScreenRotation initial_rotation);
 
@@ -236,6 +255,7 @@ private:
     bool probe_refresh_active_ = false;
 #endif
     TabBinding tab_bindings_[3]{};
+    ClaudePromptState claude_{};  // Serialized by the app loop and the LVGL lock.
 };
 
 }  // namespace usage_panel::amoled

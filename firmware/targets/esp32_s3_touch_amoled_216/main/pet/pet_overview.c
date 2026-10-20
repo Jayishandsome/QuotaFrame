@@ -249,6 +249,11 @@ static void judge(const pet_view_t *v, orb_mood_t *mood, char *line, size_t size
         if (p->short_left < LOW_LEFT && (low < 0 || p->short_left < v->provider[low].short_left)) low = i;
         if (p->pace_known && p->pace > best_pace) { best_pace = p->pace; fast = i; }
     }
+    if (known == 0 && v->claude_working) {
+        *mood = ORB_IDLE;
+        snprintf(line, size, "Claude 正在工作中…");
+        return;
+    }
     if (known == 0) {
         *mood = ORB_SLEEPY;
         snprintf(line, size, v->connected ? "等電腦傳來用量…" : "等待 Bridge 連線…");
@@ -275,6 +280,9 @@ static void judge(const pet_view_t *v, orb_mood_t *mood, char *line, size_t size
     } else if (fast >= 0) {
         *mood = ORB_THINK;
         snprintf(line, size, "%s 用得有點快喔", NAME[fast]);
+    } else if (v->claude_working) {
+        *mood = ORB_IDLE;
+        snprintf(line, size, "Claude 正在工作中…");
     } else if (min_left < GOOD_LEFT) {
         *mood = ORB_IDLE;
         snprintf(line, size, "還夠用，慢慢來");

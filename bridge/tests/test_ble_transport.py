@@ -166,6 +166,17 @@ class DeviceNameMatchingTests(unittest.TestCase):
             )
         )
 
+    def test_claude_alias_is_a_qf_device(self) -> None:
+        self.assertTrue(matches_device_name(
+            "Claude-QF-WS-S3-A216-C3D4", exact_name=None,
+            name_prefixes=DEFAULT_NAME_PREFIXES))
+        self.assertTrue(matches_device_name(
+            "Claude-QF-WS-S3-A216-C3D4", exact_name="QF-WS-S3-A216-C3D4",
+            name_prefixes=("QF-WS-",)))
+        self.assertFalse(matches_device_name(
+            "Claude-C3D4", exact_name=None,
+            name_prefixes=DEFAULT_NAME_PREFIXES))
+
     def test_exact_name_does_not_bypass_prefix_filter(self) -> None:
         self.assertFalse(
             matches_device_name(

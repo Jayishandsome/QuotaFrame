@@ -12,6 +12,7 @@
 #include "bsp/touch.h"
 #include "display_transport.hpp"
 #include "performance_probe.hpp"
+#include "pet/claude_prompt.h"
 #include "pet/pet_overview.h"
 #include "usage_fonts/usage_fonts.h"
 #include "esp_heap_caps.h"
@@ -738,6 +739,7 @@ bool DisplayUi::begin(ScreenRotation initial_rotation)
     build_navigation(screen);
     build_screensaver(screen);
     build_settings(screen);
+    claude_prompt_create(screen);  // under pairing and OTA overlays
     build_pairing_overlay(screen);
     build_ota_overlay(screen);
     show_page(Page::Overview, /*animate=*/false);
@@ -745,6 +747,15 @@ bool DisplayUi::begin(ScreenRotation initial_rotation)
         display_, transition_refresh_ready, LV_EVENT_REFR_READY, this);
 
     return true;
+}
+
+ClaudeDecision DisplayUi::take_claude_decision()
+{
+    switch (claude_prompt_take_action()) {
+    case CLAUDE_ACTION_ALLOW: return ClaudeDecision::Allow;
+    case CLAUDE_ACTION_DENY: return ClaudeDecision::Deny;
+    default: return ClaudeDecision::None;
+    }
 }
 
 bool DisplayUi::set_panel_power(bool on)
@@ -756,6 +767,10 @@ bool DisplayUi::set_panel_power(bool on)
     transition_refresh_pending_ = false;
     if (!on) {
         pet_overview_set_active(false);  // nothing to animate on a dark panel
+        if (claude_prompt_visible()) {
+            claude_prompt_view_t hidden{};
+            claude_prompt_update(&hidden);
+        }
         set_transition_brightness(0);
         // Not every panel driver implements display off; zero brightness
         // already darkens the panel, so the result is only logged.
@@ -1889,8 +1904,19 @@ void DisplayUi::render(
     }
 
     const bool ota_visible = ota.phase != OtaPhase::Idle || show_ota_error;
-    const bool screensaver_visible =
-        presentation.screensaver.active && !has_passkey && !ota_visible;
+    // A pending Claude permission prompt takes the screen, except while
+    // pairing or updating firmware.
+    const bool claude_visible = claude_.show && !has_passkey && !ota_visible;
+    claude_prompt_view_t claude_view{};
+    claude_view.show = claude_visible;
+    claude_view.tool = claude_.tool;
+    claude_view.hint = claude_.hint;
+    claude_view.waiting = claude_.waiting;
+    claude_view.reply = static_cast<claude_reply_t>(claude_.reply);
+    claude_view.serial = claude_.serial;
+    claude_prompt_update(&claude_view);
+    const bool screensaver_visible = presentation.screensaver.active &&
+        !has_passkey && !ota_visible && !claude_visible;
     const bool was_screensaver_visible =
         !lv_obj_has_flag(screensaver_panel_, LV_OBJ_FLAG_HIDDEN);
     if (screensaver_visible != was_screensaver_visible) {
@@ -1900,7 +1926,8 @@ void DisplayUi::render(
     }
     input_enabled_.store(input_enabled && !has_passkey, std::memory_order_relaxed);
     pet_overview_set_active(
-        panel_on_ && !ota_visible && !screensaver_visible && page == Page::Overview &&
+        panel_on_ && !ota_visible && !screensaver_visible && !claude_visible &&
+        page == Page::Overview &&
         !(settings_visible_.load(std::memory_order_relaxed) && !has_passkey));
     ota_active_.store(ota.phase != OtaPhase::Idle, std::memory_order_relaxed);
     ota_confirming_.store(
@@ -2046,6 +2073,7 @@ void DisplayUi::render(
     show_page(page, /*animate=*/true);
     pet_view_t pet_view{};
     pet_view.connected = connected;
+    pet_view.claude_working = claude_.working;
     pet_view.provider[0] = pet_provider_view(model, Provider::Codex, connected, now_ms);
     pet_view.provider[1] = pet_provider_view(model, Provider::Claude, connected, now_ms);
     pet_overview_update(&pet_view);

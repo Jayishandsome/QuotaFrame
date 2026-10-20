@@ -130,6 +130,14 @@ esp_err_t BleService::start(AppEventQueue& queue, const BleServiceConfig& config
             advertising_name_, sizeof(advertising_name_))) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (config.advertising_alias != nullptr && config.advertising_alias[0] != '\0') {
+        // The scan response carries only the name: 29 bytes at most.
+        char aliased[sizeof(advertising_name_)]{};
+        const int written = snprintf(aliased, sizeof(aliased), "%s%s",
+                                     config.advertising_alias, advertising_name_);
+        if (written < 0 || written > 29) return ESP_ERR_INVALID_ARG;
+        memcpy(advertising_name_, aliased, sizeof(advertising_name_));
+    }
     if (!ota_folder_sink_.bind(*ota_, target_) || !reset_folder_push()) {
         return ESP_ERR_NO_MEM;
     }
@@ -147,6 +155,8 @@ esp_err_t BleService::start(AppEventQueue& queue, const BleServiceConfig& config
         {"char_end", &BleService::folder_push_trampoline},
     };
     esp_desktop_buddy_config_t buddy_config{};
+    buddy_config.event_sink.on_event = &BleService::buddy_event_trampoline;
+    buddy_config.event_sink.ctx = this;
     buddy_config.handlers.ctx = this;
     buddy_config.handlers.on_status = &BleService::status_trampoline;
     buddy_config.handlers.command_extension.ctx = this;
@@ -178,6 +188,47 @@ esp_err_t BleService::start(AppEventQueue& queue, const BleServiceConfig& config
         folder_push_ = nullptr;
     }
     return err;
+}
+
+void BleService::buddy_event_trampoline(
+    void* ctx, const esp_desktop_buddy_event_t* event)
+{
+    if (ctx == nullptr || event == nullptr) return;
+    if (event->type == ESP_DESKTOP_BUDDY_EVENT_SNAPSHOT_UPDATED ||
+        event->type == ESP_DESKTOP_BUDDY_EVENT_LIVENESS_CHANGED ||
+        event->type == ESP_DESKTOP_BUDDY_EVENT_PERMISSION_SENT) {
+        static_cast<BleService*>(ctx)->claude_changed_.store(true);
+    }
+}
+
+void BleService::claude_snapshot(ClaudeSnapshot& out)
+{
+    out = ClaudeSnapshot{};
+    if (buddy_ == nullptr) return;
+    esp_desktop_buddy_snapshot_info_t info{};
+    if (esp_desktop_buddy_get_snapshot_info(buddy_, &info) != ESP_OK || !info.has_state) return;
+    out.live = info.live;
+    out.total = info.total;
+    out.running = info.running;
+    out.waiting = info.waiting;
+    if (!info.live || !info.prompt_present) return;
+    size_t required = 0;
+    // Truncated strings are still shown; only the id must be complete.
+    out.prompt = esp_desktop_buddy_get_prompt_id(
+        buddy_, out.prompt_id, sizeof(out.prompt_id), &required) == ESP_OK &&
+        out.prompt_id[0] != '\0';
+    if (!out.prompt) return;
+    esp_desktop_buddy_get_prompt_tool(buddy_, out.tool, sizeof(out.tool), &required);
+    esp_desktop_buddy_get_prompt_hint(buddy_, out.hint, sizeof(out.hint), &required);
+}
+
+esp_err_t BleService::claude_reply(const char* prompt_id, bool approve)
+{
+    if (buddy_ == nullptr || prompt_id == nullptr || prompt_id[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return approve ? esp_desktop_buddy_prompt_approve_once(buddy_, prompt_id)
+                   : esp_desktop_buddy_prompt_deny(buddy_, prompt_id);
 }
 
 void BleService::verify_boot()
