@@ -22,6 +22,7 @@
 #include "usage_ota/session.hpp"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_pm.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -244,6 +245,19 @@ extern "C" void app_main(void)
     // Wired before BLE so no peer can reach the manifest path ungated; the
     // verdict itself is published by the main-loop power poll below.
     ota.set_power_source(&ota_power_source);
+    // macOS keeps the name it first saw for a Bluetooth address, even after
+    // "Forget This Device", and the Claude desktop app's Hardware Buddy picker
+    // only lists names starting with "Claude". Advertise from an address with
+    // the locally administered bit set so this build appears as a new device
+    // (renamed Claude-QF-...) instead of the cached QF-... entry.
+    uint8_t bt_mac[6]{};
+    if (esp_read_mac(bt_mac, ESP_MAC_BT) == ESP_OK) {
+        bt_mac[0] |= 0x02;
+        const esp_err_t mac_error = esp_iface_mac_addr_set(bt_mac, ESP_MAC_BT);
+        if (mac_error != ESP_OK) {
+            ESP_LOGW(TAG, "Bluetooth address override failed: %s", esp_err_to_name(mac_error));
+        }
+    }
     ESP_ERROR_CHECK(ble.start(events, ble_config));
     log_memory_checkpoint("after_ble", true);
 #if CONFIG_WS_USAGE_PANEL_MEMORY_PROBE
