@@ -1,7 +1,7 @@
 // butler-stt: turns one WAV file into text with Apple's own speech recognition.
 //
 //   butler-stt --file speech.wav [--locale zh-HK] [--engine auto|analyzer|legacy]
-//   butler-stt --prepare [--locale zh-HK]      download the language model / ask permission
+//   butler-stt --prepare [--locale zh-TW]      download the language model / ask permission
 //   butler-stt --list-locales
 //
 // Prints one JSON line: {"text": ..., "engine": ...} or {"error": code, "detail": ...}.
@@ -34,7 +34,7 @@ func argument(_ name: String) -> String? {
 @available(macOS 26.0, *)
 enum Analyzer {
     static func resolve(_ identifier: String) async -> Locale? {
-        for candidate in [identifier, "yue-CN", "yue-Hant-HK", "zh-HK"] {
+        for candidate in [identifier, "zh-Hant-TW", "zh-TW"] {
             if let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: candidate)) {
                 return locale
             }
@@ -126,7 +126,7 @@ enum Legacy {
 @main
 struct ButlerSTT {
     static func main() async {
-        let identifier = argument("--locale") ?? "zh-HK"
+        let identifier = argument("--locale") ?? "zh-TW"
         let engine = argument("--engine") ?? "auto"
         do {
             if CommandLine.arguments.contains("--list-locales") {

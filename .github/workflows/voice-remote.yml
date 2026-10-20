@@ -56,8 +56,8 @@ jobs:
         working-directory: stt
         continue-on-error: true
         run: |
-          say -v Sinji -o /tmp/hello.aiff "幫我整理今日嘅電郵" || say -o /tmp/hello.aiff "please tidy my email"
+          say -v Meijia -o /tmp/hello.aiff "幫我整理今天的郵件" || say -o /tmp/hello.aiff "please tidy my email"
           afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/hello.aiff /tmp/hello.wav
-          ./build/butler-stt --prepare --locale zh-HK || true
-          ./build/butler-stt --file /tmp/hello.wav --locale zh-HK --engine analyzer || true
+          ./build/butler-stt --prepare --locale zh-TW || true
+          ./build/butler-stt --file /tmp/hello.wav --locale zh-TW --engine analyzer || true
           ./build/butler-stt --file /tmp/hello.wav --locale en-US --engine analyzer || true
