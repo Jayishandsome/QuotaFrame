@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 28 px
  * Bpp: 4
- * Opts: --font /tmp/claude-0/-home-claude/f618b974-a267-5951-bb01-468d4f4b25e3/scratchpad/fonts/NotoSansTC-700.ttf --size 28 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --symbols  !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~·、。「」一上下不並了交令你使個入內再出到動去取同向和喚回在址執填失始子字定寫封就已幕後憑應成或找把指按提敗文最有未板果查楚機次正沒消清滑用的看眠睡知確示秒稍窗端結給網線聲聽能腦自螢行要視觸設試話認語說請講證識輕轉辨近返送連進道還醒重金鑰長開電需靠面音點， -o /home/claude/gb/firmware/main/fonts/font_ui_28.c --lv-font-name font_ui_28
+ * Opts: --font /tmp/claude-0/-home-claude/f618b974-a267-5951-bb01-468d4f4b25e3/scratchpad/fonts/NotoSansTC-700.ttf --size 28 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --symbols= !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~·、。「」一上下不並了交令你使個入內再出到動去取同向和喚回在址執填失始子字定寫封就已幕後憑應成或找把指按提敗文最有未板果查楚機次正沒消清滑用的看眠睡知確示秒稍窗端結給網線聲聽能腦自螢行要視觸設試話認語說請講證識輕轉辨近返送連進道還醒重金鑰長開電需靠面音點， -o /home/claude/gb/firmware/main/fonts/font_ui_28.c --lv-font-name font_ui_28
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

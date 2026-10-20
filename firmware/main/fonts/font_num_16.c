@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 16 px
  * Bpp: 4
- * Opts: --font /tmp/claude-0/-home-claude/f618b974-a267-5951-bb01-468d4f4b25e3/scratchpad/fonts/SpaceGrotesk-500.ttf --size 16 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --symbols  !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ -o /home/claude/gb/firmware/main/fonts/font_num_16.c --lv-font-name font_num_16
+ * Opts: --font /tmp/claude-0/-home-claude/f618b974-a267-5951-bb01-468d4f4b25e3/scratchpad/fonts/SpaceGrotesk-500.ttf --size 16 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --symbols= !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ -o /home/claude/gb/firmware/main/fonts/font_num_16.c --lv-font-name font_num_16
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

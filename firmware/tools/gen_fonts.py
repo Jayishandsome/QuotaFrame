@@ -58,7 +58,7 @@ def convert(ttf, size, symbols, name, bpp=4):
     keep = "".join(sorted({c for c in symbols if ord(c) in cmap and c not in "\n\r\t"}))
     subprocess.run(["npx", "--yes", "lv_font_conv@1.5.3", "--font", str(ttf), "--size", str(size),
                     "--bpp", str(bpp), "--no-compress", "--format", "lvgl", "--lv-include", "lvgl.h",
-                    "--symbols", keep, "-o", str(OUT / f"{name}.c"), "--lv-font-name", name],
+                    "--symbols=" + keep, "-o", str(OUT / f"{name}.c"), "--lv-font-name", name],
                    check=True)
     print(f"{name}: {len(keep)} glyphs")
 
@@ -91,7 +91,7 @@ def main():
     convert(tc500, 20, ui, "font_ui_20")
     convert(tc700, 28, ui, "font_ui_28")
     convert(sg500, 16, ascii_, "font_num_16")
-    convert(sg400, 64, "0123456789:", "font_num_64")
+    convert(sg400, 64, "0123456789:-", "font_num_64")
 
 
 if __name__ == "__main__":

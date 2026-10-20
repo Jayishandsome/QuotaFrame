@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <time.h>
 
 #include "freertos/FreeRTOS.h"
@@ -402,10 +403,64 @@ static void pmu_update_bits(uint8_t reg, uint8_t mask, uint8_t bits)
     if (v >= 0) pmu_write(reg, (uint8_t)((v & ~mask) | bits));
 }
 
+/* ---------------------------------------------------------------- clock -- */
+
+/*
+ * PCF85063 real-time clock (0x51) keeps local time while the board is off or
+ * away from Wi-Fi. Boot: system clock <- RTC. After network time: RTC <- clock.
+ */
+#define RTC_ADDR 0x51
+static i2c_master_dev_handle_t rtc;
+
+static int from_bcd(uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); }
+static uint8_t to_bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
+
+static void rtc_load(void)
+{
+    uint8_t reg = 0x04, r[7];
+    if (i2c_master_transmit_receive(rtc, &reg, 1, r, sizeof(r), 100) != ESP_OK) return;
+    if (r[0] & 0x80) {
+        ESP_LOGW(TAG, "Clock chip lost its time; waiting for network time");
+        return;
+    }
+    struct tm tm = {.tm_sec = from_bcd(r[0] & 0x7F), .tm_min = from_bcd(r[1] & 0x7F),
+                    .tm_hour = from_bcd(r[2] & 0x3F), .tm_mday = from_bcd(r[3] & 0x3F),
+                    .tm_mon = from_bcd(r[5] & 0x1F) - 1, .tm_year = from_bcd(r[6]) + 100, .tm_isdst = -1};
+    if (tm.tm_year < 124 || time(NULL) > 1700000000) return;  // invalid, or network time already set
+    struct timeval now = {.tv_sec = mktime(&tm)};
+    settimeofday(&now, NULL);
+    ESP_LOGI(TAG, "Clock set from the clock chip");
+}
+
+static void rtc_save(void)
+{
+    if (!rtc) return;
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    uint8_t reg = 0x00, control;
+    if (i2c_master_transmit_receive(rtc, &reg, 1, &control, 1, 100) != ESP_OK) return;
+    // Stop the oscillator while writing so all fields belong to one instant; 24-hour mode.
+    uint8_t stop[2] = {0x00, (uint8_t)((control | 0x20) & ~0x02)};
+    uint8_t calendar[8] = {0x04, to_bcd(tm.tm_sec), to_bcd(tm.tm_min), to_bcd(tm.tm_hour), to_bcd(tm.tm_mday),
+                           (uint8_t)tm.tm_wday, to_bcd(tm.tm_mon + 1), to_bcd(tm.tm_year - 100)};
+    uint8_t resume[2] = {0x00, (uint8_t)(control & ~(0x20 | 0x02))};
+    i2c_master_transmit(rtc, stop, 2, 100);
+    i2c_master_transmit(rtc, calendar, sizeof(calendar), 100);
+    i2c_master_transmit(rtc, resume, 2, 100);
+}
+
 static void battery_task(void *arg)
 {
     (void)arg;
     i2c_master_bus_handle_t bus = bsp_i2c_get_handle();
+    i2c_device_config_t rtc_cfg = {.dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = RTC_ADDR,
+                                   .scl_speed_hz = 400000};
+    if (bus && i2c_master_bus_add_device(bus, &rtc_cfg, &rtc) == ESP_OK) {
+        uint8_t cap[2] = {0x00, 0x01};  // 12.5 pF crystal load, clock running, 24-hour
+        if (i2c_master_transmit(rtc, cap, 2, 100) == ESP_OK) rtc_load();
+        else rtc = NULL;
+    }
     i2c_device_config_t cfg = {.dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = AXP2101_ADDR,
                                .scl_speed_hz = 400000};
     if (!bus || i2c_master_bus_add_device(bus, &cfg, &pmu) != ESP_OK || pmu_read(0x00) < 0) {
@@ -555,6 +610,7 @@ static void network_task(void *arg)
     esp_sntp_config_t time_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     ESP_ERROR_CHECK(esp_netif_sntp_init(&time_config));
     while (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(30000)) != ESP_OK) ESP_LOGW(TAG, "Waiting for network time");
+    rtc_save();
     snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\n", token);
     esp_websocket_client_config_t cfg = {.uri = uri, .headers = headers, .cert_pem = ca_pem,
         .buffer_size = 2048, .reconnect_timeout_ms = 5000, .network_timeout_ms = 5000,
