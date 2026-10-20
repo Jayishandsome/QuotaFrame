@@ -270,6 +270,14 @@ static lv_obj_t *orb_arc(orb_t *o, float cx)
     return arc;
 }
 
+/*
+ * Hands, light trails and the hop reach outside the orb's box. LVGL clips
+ * invalidated areas to each parent's box plus its "extra draw size", so give
+ * the containers a margin; otherwise moved parts outside the box are never
+ * repainted and the trails look cut off.
+ */
+static void orb_margin(lv_event_t *e) { lv_event_set_ext_draw_size(e, 72); }
+
 static void orb_create(orb_t *o, lv_obj_t *parent, bool large)
 {
     memset(o, 0, sizeof(*o));
@@ -287,6 +295,10 @@ static void orb_create(orb_t *o, lv_obj_t *parent, bool large)
     o->floatbox = plain(o->root);
     lv_obj_set_size(o->floatbox, size, size);
     lv_obj_add_flag(o->floatbox, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_add_event_cb(o->root, orb_margin, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
+    lv_obj_add_event_cb(o->floatbox, orb_margin, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
+    lv_obj_refresh_ext_draw_size(o->root);
+    lv_obj_refresh_ext_draw_size(o->floatbox);
 
     o->hand_l = lv_image_create(o->floatbox);
     o->hand_r = lv_image_create(o->floatbox);
